@@ -5,8 +5,15 @@ import os
 import random
 import time
 from distutils.util import strtobool
+import minigrid
+import gym
+from gym import spaces
+import numpy as np
+from functools import reduce
+import operator
 
 import gym
+import gymnasium
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,6 +21,66 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+class CustomFlatObsWrapper(gym.core.ObservationWrapper):
+    '''
+    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
+    Which only considers the case where the observation contains both `image` and `mission`
+    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
+    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
+    '''
+    def __init__(self, env, maxStrLen=96):
+        super().__init__(env)
+
+        self.maxStrLen = maxStrLen
+        self.numCharCodes = 27
+
+        if isinstance(env.observation_space, spaces.Dict): 
+            imgSpace = env.observation_space.spaces['image']
+        else:
+            imgSpace = env.observation_space
+        imgSize = reduce(operator.mul, imgSpace.shape, 1)
+
+        self.observation_space = spaces.Box(
+            low=0,
+            high=255,
+            shape=(imgSize + self.numCharCodes * self.maxStrLen,),
+            dtype='uint8'
+        )
+
+        self.cachedStr = None
+        self.cachedArray = None
+        
+    def observation(self, obs):
+        if isinstance(obs, dict):
+            return self._observation(obs)
+        return obs.flatten()
+
+    
+    def _observation(self, obs):
+        image = obs['image']
+        mission = obs['mission']
+
+        # Cache the last-encoded mission string
+        if mission != self.cachedStr:
+            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
+            mission = mission.lower()
+
+            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
+
+            for idx, ch in enumerate(mission):
+                if ch >= 'a' and ch <= 'z':
+                    chNo = ord(ch) - ord('a')
+                elif ch == ' ':
+                    chNo = ord('z') - ord('a') + 1
+                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
+                strArray[idx, chNo] = 1
+
+            self.cachedStr = mission
+            self.cachedArray = strArray
+
+        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
+
+        return obs
 
 def parse_args():
     # fmt: off
@@ -87,15 +154,46 @@ def parse_args():
     # fmt: on
     return args
 
+class TransposeImageWrapper(gym.ObservationWrapper):
+    '''Transpose img dimension before being fed to neural net'''
+    def __init__(self, env, op=[2,0,1]):
+        super().__init__(env)
+        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
+        self.op = op
+        obs_shape = self.observation_space.shape
+        self.observation_space = gym.spaces.Box(
+            self.observation_space.low[0, 0, 0],
+            self.observation_space.high[0, 0, 0], [
+                obs_shape[self.op[0]], obs_shape[self.op[1]],
+                obs_shape[self.op[2]]
+            ],
+            dtype=self.observation_space.dtype)
+
+    def observation(self, ob):
+        return ob.transpose(self.op[0], self.op[1], self.op[2])
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
-        env = gym.make(env_id)
+        env = gymnasium.make(env_id)
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
+        env = ImgObsWrapper(env)
+        env = TransposeImageWrapper(env)
+  
+        env.action_space = gym.spaces.Discrete(env.action_space.n)
+        env.observation_space = gym.spaces.Box(
+            low=np.zeros(shape=env.observation_space.shape,dtype=int), 
+            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
+        )
+        print(np.array(env.reset()[0]).shape)
+
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
             if idx == 0:
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        env.seed(seed)
+        try:
+            env.seed(seed)
+        except:
+            print("cannot seed the environment")
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
@@ -121,7 +219,7 @@ OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim, num_layers=2, num_filters=32):
+    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
@@ -134,14 +232,22 @@ class PixelEncoder(nn.Module):
         )
         for i in range(num_layers - 1):
             self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
-
-        out_dim = OUT_DIM[num_layers]
-        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
+        sample = envs.observation_space.sample()
+        sample = torch.Tensor(sample)
+        for module in self.convs:
+            sample = module(sample)
+        output_shape = sample[0].shape
+        print('latent dim of ae')
+        print(output_shape)
+        latent_dim = np.prod(output_shape)
+        print(latent_dim)
+        self.fc = nn.Linear(latent_dim, self.feature_dim)
         self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
     def forward_conv(self, obs):
+        print(obs.shape)
         obs = obs / 255.
         self.outputs['obs'] = obs
 
@@ -157,6 +263,7 @@ class PixelEncoder(nn.Module):
 
     def forward(self, obs, detach=False):
         h = self.forward_conv(obs)
+        print(h.shape)
 
         if detach:
             h = h.detach()
@@ -310,34 +417,44 @@ if __name__ == "__main__":
     beta=1
 
     # env setup
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    import gym
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+        envs
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    encoder, decoder = PixelEncoder().to(device), PixelDecoder().to(device)
+    encoder, decoder = (
+        PixelEncoder(envs, envs.single_observation_space.shape, ae_dim).to(device), 
+        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
+    )
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # Collect random transitions for training AE
-    curr_states = envs.reset()
+    curr_states, _ = envs.reset()
     ae_dataset = [curr_states]
     for _ in range(ae_env_step):
         actions = envs.action_space.sample()
-        next_obs, reward, done, info = envs.step(actions)
+        next_obs, reward, terminated, truncated, info = envs.step(actions)
+        done = np.bitwise_or(terminated, truncated)
         ae_dataset.append(next_obs)
 
     ae_dataset = np.array(ae_dataset, dtype=np.float32)
+    ae_dataset = ae_dataset.reshape((-1,)+ ae_dataset.shape[-3:])
     for i in range(ae_num_train_step):
         indices = np.random.randint(0, len(ae_dataset), ae_batch_size)
         batch = ae_dataset[indices]
         batch = torch.Tensor(batch).to(device)
         latent = encoder(batch)
         reconstruct = decoder(latent)
-        loss = torch.mse(reconstruct, batch/255) + beta * torch.linalg.norm(latent)
+        print("loss")
+        print(batch.shape)
+        print(reconstruct.shape)
+        loss = torch.nn.functional.mse_loss(reconstruct, batch/255) + beta * torch.linalg.norm(latent)
         writer.add_scalar("ae/loss", loss.item(), i)
 
         encoder_optim.zero_grad()
@@ -357,7 +474,7 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
-    next_obs = torch.Tensor(envs.reset()).to(device)
+    next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
 
