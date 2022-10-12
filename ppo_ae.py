@@ -230,17 +230,17 @@ class PixelDecoder(nn.Module):
 # ===================================
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, obs_shape ):
         super().__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
@@ -286,6 +286,16 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    # setup AE dimension here
+    ae_dim=10
+    # setup random timesteps to collect data for training AE (prior to training of PPO)
+    # (after AE is trained on random samples, this AE is freezed for training PPO)
+    ae_step = 10000
+    # number of update of AE
+    ae_num_train_step = 10000
+    ae_batch_size = 256
+    # control the l2 regularization of the latent vectors
+    beta=1
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -293,8 +303,36 @@ if __name__ == "__main__":
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    encoder, decoder = PixelEncoder().to(device), PixelDecoder().to(device)
+    encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    # Collect random transitions for training AE
+    curr_states = envs.reset()
+    ae_dataset = [curr_states]
+    for _ in range(ae_step):
+        actions = envs.action_space.sample()
+        next_obs, reward, done, info = envs.step(actions)
+        ae_dataset.append(next_obs)
+
+    ae_dataset = np.array(ae_dataset, dtype=np.float32)
+    for i in range(ae_num_train_step):
+        indices = np.random.randint(0, len(ae_dataset), ae_batch_size)
+        batch = ae_dataset[indices]
+        batch = torch.Tensor(batch).to(device)
+        latent = encoder(batch)
+        reconstruct = decoder(latent)
+        loss = torch.mse(reconstruct, batch/255) + beta * torch.linalg.norm(latent)
+        writer.add_scalar("ae/loss", loss.item(), i)
+
+        encoder_optim.zero_grad()
+        decoder_optim.zero_grad()
+        loss.backward()
+        encoder_optim.step()
+        decoder_optim.step()
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -311,6 +349,7 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
 
+    # actual training with PPO
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
