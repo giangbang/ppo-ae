@@ -468,6 +468,9 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
+    
+    # measure success and reward
+    rewards_all = np.zeros(args.num_envs)
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -494,10 +497,18 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
+            # log success and rewards
+            for i, d in done:
+                if d:
+                    writer.add_scalar("train/rewards", reward[i], global_step)
+                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
+                    reward[i] = 0
+            
             for item in info:
                 if "episode" in item:
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
