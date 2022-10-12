@@ -184,7 +184,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
             low=np.zeros(shape=env.observation_space.shape,dtype=int), 
             high=np.ones(shape=env.observation_space.shape,dtype=int)*255
         )
-        print(np.array(env.reset()[0]).shape)
+        print("obs shape", np.array(env.reset()[0]).shape)
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
@@ -228,26 +228,17 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
 
         self.convs = nn.ModuleList(
-            [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
+            [nn.Flatten(), nn.Linear(np.prod(obs_shape), num_filters)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
-        sample = envs.observation_space.sample()
-        sample = torch.Tensor(sample)
-        for module in self.convs:
-            sample = module(sample)
-        output_shape = sample[0].shape
-        print('latent dim of ae')
-        print(output_shape)
-        latent_dim = np.prod(output_shape)
-        print(latent_dim)
-        self.fc = nn.Linear(latent_dim, self.feature_dim)
+            self.convs.append(nn.Linear(num_filters, num_filters))
+        
+        self.fc = nn.Linear(num_filters, self.feature_dim)
         self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
     def forward_conv(self, obs):
-        print(obs.shape)
         obs = obs / 255.
         self.outputs['obs'] = obs
 
@@ -263,7 +254,6 @@ class PixelEncoder(nn.Module):
 
     def forward(self, obs, detach=False):
         h = self.forward_conv(obs)
-        print(h.shape)
 
         if detach:
             h = h.detach()
@@ -295,26 +285,26 @@ class PixelEncoder(nn.Module):
                 writer.add_image('train_encoder/%s_img' % k, v[0], step)
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim, num_layers=2, num_filters=32):
+    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=32):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        self.out_dim = OUT_DIM[num_layers]
+        self.output_dim=obs_shape
 
         self.fc = nn.Linear(
-            feature_dim, num_filters * self.out_dim * self.out_dim
+            feature_dim, num_filters
         )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
+                nn.Linear(num_filters, num_filters)
             )
         self.deconvs.append(
-            nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2, output_padding=1
+            nn.Linear(
+                num_filters, np.prod(obs_shape)
             )
         )
 
@@ -324,7 +314,8 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
+        # deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
+        deconv = h
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
@@ -332,6 +323,7 @@ class PixelDecoder(nn.Module):
             self.outputs['deconv%s' % (i + 1)] = deconv
 
         obs = self.deconvs[-1](deconv)
+        obs = obs.view(obs.shape[0], *self.output_dim)
         self.outputs['obs'] = obs
 
         return obs
@@ -429,7 +421,7 @@ if __name__ == "__main__":
 
     encoder, decoder = (
         PixelEncoder(envs, envs.single_observation_space.shape, ae_dim).to(device), 
-        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
+        PixelDecoder(envs, envs.single_observation_space.shape, ae_dim).to(device)
     )
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -451,9 +443,7 @@ if __name__ == "__main__":
         batch = torch.Tensor(batch).to(device)
         latent = encoder(batch)
         reconstruct = decoder(latent)
-        print("loss")
-        print(batch.shape)
-        print(reconstruct.shape)
+        assert batch.shape == reconstruct.shape
         loss = torch.nn.functional.mse_loss(reconstruct, batch/255) + beta * torch.linalg.norm(latent)
         writer.add_scalar("ae/loss", loss.item(), i)
 
@@ -462,6 +452,7 @@ if __name__ == "__main__":
         loss.backward()
         encoder_optim.step()
         decoder_optim.step()
+    print("done train ae")
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs, args.ae_dim)).to(device)
@@ -502,12 +493,13 @@ if __name__ == "__main__":
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, done, info = envs.step(action.cpu().numpy())
+            next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
             for item in info:
-                if "episode" in item.keys():
+                if "episode" in item:
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
@@ -531,7 +523,7 @@ if __name__ == "__main__":
             returns = advantages + values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+        b_obs = obs.reshape((-1,) + (args.ae_dim,))
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
         b_advantages = advantages.reshape(-1)
@@ -606,7 +598,7 @@ if __name__ == "__main__":
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
+        # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
     envs.close()
