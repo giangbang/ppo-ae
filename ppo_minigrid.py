@@ -118,9 +118,7 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
     def observation(self, obs):
         if isinstance(obs, dict):
             return self._observation(obs)
-        obs, info = np.array(obs[0]), obs[1]
-        return obs.flatten(), info
-
+        return obs.flatten()
     
     def _observation(self, obs):
         image = obs['image']
@@ -159,7 +157,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
             low=np.zeros(shape=env.observation_space.shape,dtype=int), 
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
+            high=np.ones(shape=env.observation_space.shape,dtype=int)*10
         )
         print("obs shape", np.array(env.reset()[0]).shape)
 
@@ -297,7 +295,7 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
             
-            for i, d in done:
+            for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
                     writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)

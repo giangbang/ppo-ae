@@ -239,7 +239,7 @@ class PixelEncoder(nn.Module):
         self.outputs = dict()
 
     def forward_conv(self, obs):
-        obs = obs / 255.
+        obs = obs / 10.
         self.outputs['obs'] = obs
 
         conv = torch.relu(self.convs[0](obs))
@@ -444,7 +444,7 @@ if __name__ == "__main__":
         latent = encoder(batch)
         reconstruct = decoder(latent)
         assert batch.shape == reconstruct.shape
-        loss = torch.nn.functional.mse_loss(reconstruct, batch/255) + beta * torch.linalg.norm(latent)
+        loss = torch.nn.functional.mse_loss(reconstruct, batch/10) + beta * torch.linalg.norm(latent)
         writer.add_scalar("ae/loss", loss.item(), i)
 
         encoder_optim.zero_grad()
@@ -503,7 +503,7 @@ if __name__ == "__main__":
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
             # log success and rewards
-            for i, d in done:
+            for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", reward[i], global_step)
                     writer.add_scalar("train/success", reward[i] > 0.1, global_step)
