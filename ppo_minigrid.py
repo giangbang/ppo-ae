@@ -21,6 +21,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+
+
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
@@ -82,13 +84,77 @@ def parse_args():
     # fmt: on
     return args
 
+class CustomFlatObsWrapper(gym.core.ObservationWrapper):
+    '''
+    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
+    Which only considers the case where the observation contains both `image` and `mission`
+    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
+    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
+    '''
+    def __init__(self, env, maxStrLen=96):
+        super().__init__(env)
+
+        self.maxStrLen = maxStrLen
+        self.numCharCodes = 27
+
+        if isinstance(env.observation_space, spaces.Dict): 
+            imgSpace = env.observation_space.spaces['image']
+        else:
+            imgSpace = env.observation_space
+        imgSize = reduce(operator.mul, imgSpace.shape, 1)
+
+        obs_shape = np.array(self.reset()[0]).shape
+
+        self.observation_space = spaces.Box(
+            low=0,
+            high=10,
+            shape=(np.prod(obs_shape),),
+            dtype='uint8'
+        )
+
+        self.cachedStr = None
+        self.cachedArray = None
+        
+    def observation(self, obs):
+        if isinstance(obs, dict):
+            return self._observation(obs)
+        obs, info = np.array(obs[0]), obs[1]
+        return obs.flatten(), info
+
+    
+    def _observation(self, obs):
+        image = obs['image']
+        mission = obs['mission']
+
+        # Cache the last-encoded mission string
+        if mission != self.cachedStr:
+            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
+            mission = mission.lower()
+
+            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
+
+            for idx, ch in enumerate(mission):
+                if ch >= 'a' and ch <= 'z':
+                    chNo = ord(ch) - ord('a')
+                elif ch == ' ':
+                    chNo = ord('z') - ord('a') + 1
+                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
+                strArray[idx, chNo] = 1
+
+            self.cachedStr = mission
+            self.cachedArray = strArray
+
+        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
+
+        return obs
+
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
         env = ImgObsWrapper(env)
-        env = TransposeImageWrapper(env)
+        env = CustomFlatObsWrapper(env)
   
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
@@ -116,6 +182,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
+
 
 
 class Agent(nn.Module):
