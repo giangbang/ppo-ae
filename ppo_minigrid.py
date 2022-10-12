@@ -5,15 +5,21 @@ import os
 import random
 import time
 from distutils.util import strtobool
+import minigrid
+import gym
+from gym import spaces
+import numpy as np
+from functools import reduce
+import operator
 
 import gym
+import gymnasium
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
 
 def parse_args():
     # fmt: off
@@ -79,12 +85,26 @@ def parse_args():
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
-        env = gym.make(env_id)
+        env = gymnasium.make(env_id)
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
+        env = ImgObsWrapper(env)
+        env = TransposeImageWrapper(env)
+  
+        env.action_space = gym.spaces.Discrete(env.action_space.n)
+        env.observation_space = gym.spaces.Box(
+            low=np.zeros(shape=env.observation_space.shape,dtype=int), 
+            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
+        )
+        print("obs shape", np.array(env.reset()[0]).shape)
+
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
             if idx == 0:
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        # env.seed(seed)
+        try:
+            env.seed(seed)
+        except:
+            print("cannot seed the environment")
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
@@ -180,6 +200,9 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
+    
+    # measure success and reward
+    rewards_all = np.zeros(args.num_envs)
 
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
@@ -202,9 +225,16 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminate, truncate, info = envs.step(action.cpu().numpy())
+            rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminate, truncate)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+            
+            for i, d in done:
+                if d:
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
+                    rewards_all[i] = 0
 
             for item in info:
                 if "episode" in item:
@@ -305,7 +335,7 @@ if __name__ == "__main__":
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
+        # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
     envs.close()
