@@ -70,6 +70,17 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
+        
+    # auto encoder parameters
+    parser.add_argument("--ae-dim", type=int, default=5,
+        help="number of hidden dim in ae")
+    parser.add_argument("--ae-batch-size", type=int, default=256,
+        help="AE batch size")
+    parser.add_argument("--ae-training-step", type=int, default=10000,
+        help="number of training steps in ae")
+    parser.add_argument("--ae-env-step", type=int, default=10000,
+        help="number of random exploration steps to collect data to train ae")
+    
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -286,14 +297,15 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    
     # setup AE dimension here
-    ae_dim=10
+    ae_dim=args.ae_dim
     # setup random timesteps to collect data for training AE (prior to training of PPO)
     # (after AE is trained on random samples, this AE is freezed for training PPO)
-    ae_step = 10000
+    ae_env_step = args.ae_env_step
     # number of update of AE
-    ae_num_train_step = 10000
-    ae_batch_size = 256
+    ae_num_train_step = args.ae_training_step
+    ae_batch_size = args.ae_batch_size
     # control the l2 regularization of the latent vectors
     beta=1
 
@@ -313,7 +325,7 @@ if __name__ == "__main__":
     # Collect random transitions for training AE
     curr_states = envs.reset()
     ae_dataset = [curr_states]
-    for _ in range(ae_step):
+    for _ in range(ae_env_step):
         actions = envs.action_space.sample()
         next_obs, reward, done, info = envs.step(actions)
         ae_dataset.append(next_obs)
@@ -335,7 +347,7 @@ if __name__ == "__main__":
         decoder_optim.step()
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
+    obs = torch.zeros((args.num_steps, args.num_envs, args.ae_dim)).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
     logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
@@ -359,6 +371,9 @@ if __name__ == "__main__":
 
         for step in range(0, args.num_steps):
             global_step += 1 * args.num_envs
+            # encode the observation with AE
+            with torch.no_grad():
+                next_obs = encoder(next_obs)
             obs[step] = next_obs
             dones[step] = next_done
 
@@ -383,7 +398,8 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
+            next_embedding = encoder(next_obs)
+            next_value = agent.get_value(next_embedding).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
