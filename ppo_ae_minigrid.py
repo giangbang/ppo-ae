@@ -147,6 +147,8 @@ def parse_args():
         help="number of training steps in ae")
     parser.add_argument("--ae-env-step", type=int, default=10000,
         help="number of random exploration steps to collect data to train ae")
+    parser.add_argument("--beta", type=float, default=0.01,
+        help="L2 norm of the latent vectors")
     
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -406,7 +408,7 @@ if __name__ == "__main__":
     ae_num_train_step = args.ae_training_step
     ae_batch_size = args.ae_batch_size
     # control the l2 regularization of the latent vectors
-    beta=1
+    beta=args.beta
 
     # env setup
     envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
