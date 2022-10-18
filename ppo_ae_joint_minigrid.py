@@ -21,6 +21,21 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+def pprint(dict_data):
+    '''Pretty print Hyper-parameters'''
+    hyper_param_space, value_space = 30, 40
+    format_str = "| {:<"+ f"{hyper_param_space}" + "} | {:<"+f"{value_space}"+"}|"
+    hbar = '-'*(hyper_param_space + value_space+6)
+    
+    print(hbar)
+    print(format_str.format('Hyperparams', 'Values'))
+    print(hbar)
+    
+    for k, v in dict_data.items():
+        print(format_str.format(str(k), str(v)))
+        
+    print(hbar)
+
 class CustomFlatObsWrapper(gym.core.ObservationWrapper):
     '''
     This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
@@ -420,6 +435,10 @@ if __name__ == "__main__":
     ae_batch_size = args.ae_batch_size
     # control the l2 regularization of the latent vectors
     beta=args.beta
+    
+    # pretty print the hyperparameters
+    # comment this line if you don't want this effect
+    pprint(vars(args))
 
     # env setup
     envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
@@ -592,33 +611,34 @@ if __name__ == "__main__":
                 nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
                 optimizer.step()
                 encoder_optim.step()
+                
+                # training auto encoder
+                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size, 
+                                           size=(args.ae_batch_size,))
+                ae_batch = buffer_ae[ae_indx_batch]
+                # flatten
+                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+                # update AE 
+                latent = encoder(ae_batch)
+                reconstruct = decoder(latent)
+                assert ae_batch.shape == reconstruct.shape
+                loss = torch.nn.functional.mse_loss(reconstruct, ae_batch/10) + beta * torch.linalg.norm(latent)
+                writer.add_scalar("ae/loss", loss.item(), global_step)
+                
+                encoder_optim.zero_grad()
+                decoder_optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+                encoder_optim.step()
+                decoder_optim.step()
+
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-                    
-        # training auto encoder
-        current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-        ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size, 
-                                   size=args.batch_size)
-        ae_batch = buffer_ae[ae_indx_batch]
-        # flatten
-        ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-        # update AE 
-        latent = encoder(ae_batch)
-        reconstruct = decoder(latent)
-        assert ae_batch.shape == reconstruct.shape
-        loss = torch.nn.functional.mse_loss(reconstruct, batch/10) + beta * torch.linalg.norm(latent)
-        writer.add_scalar("ae/loss", loss.item(), global_step)
-        
-        encoder_optim.zero_grad()
-        decoder_optim.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-        nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-        encoder_optim.step()
-        decoder_optim.step()
-        
+                            
         # for some every step, save the current data for training of AE
         if (global_step/args.num_envs) % (args.save_ae_training_data_freq/args.num_envs) == 0:
             os.makedirs("ae_data", exist_ok=True)
