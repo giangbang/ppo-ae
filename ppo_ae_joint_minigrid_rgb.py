@@ -26,14 +26,14 @@ def pprint(dict_data):
     hyper_param_space, value_space = 30, 40
     format_str = "| {:<"+ f"{hyper_param_space}" + "} | {:<"+f"{value_space}"+"}|"
     hbar = '-'*(hyper_param_space + value_space+6)
-    
+
     print(hbar)
     print(format_str.format('Hyperparams', 'Values'))
     print(hbar)
-    
+
     for k, v in dict_data.items():
         print(format_str.format(str(k), str(v)))
-        
+
     print(hbar)
 
 class CustomFlatObsWrapper(gym.core.ObservationWrapper):
@@ -49,7 +49,7 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
         self.maxStrLen = maxStrLen
         self.numCharCodes = 27
 
-        if isinstance(env.observation_space, spaces.Dict): 
+        if isinstance(env.observation_space, spaces.Dict):
             imgSpace = env.observation_space.spaces['image']
         else:
             imgSpace = env.observation_space
@@ -64,13 +64,13 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
 
         self.cachedStr = None
         self.cachedArray = None
-        
+
     def observation(self, obs):
         if isinstance(obs, dict):
             return self._observation(obs)
         return obs.flatten()
 
-    
+
     def _observation(self, obs):
         image = obs['image']
         mission = obs['mission']
@@ -154,7 +154,7 @@ def parse_args():
         help="the target KL divergence threshold")
     parser.add_argument("--save-model-every", type=int, default=200_000,
         help="Save model every env steps")
-        
+
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
@@ -164,12 +164,12 @@ def parse_args():
         help="L2 norm of the latent vectors")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
         help="buffer size for training ae")
-    parser.add_argument("--save-ae-training-data-freq", type=int, default=200_000,
+    parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-    
-    
+
+
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -201,10 +201,10 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
         env = TransposeImageWrapper(env)
-  
+
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int), 
+            low=np.zeros(shape=env.observation_space.shape,dtype=int),
             high=np.ones(shape=env.observation_space.shape,dtype=int)*255
         )
         print("obs shape", np.array(env.reset()[0]).shape)
@@ -250,7 +250,7 @@ class PixelEncoder(nn.Module):
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to [64x64]
 
@@ -270,7 +270,7 @@ class PixelEncoder(nn.Module):
         obs = self.resize(obs)
         obs = obs / 255.
         self.outputs['obs'] = obs
-        
+
         conv = torch.relu(self.convs[0](obs))
         self.outputs['conv1'] = conv
 
@@ -344,7 +344,7 @@ class PixelDecoder(nn.Module):
         self.outputs['obs'] = obs
 
         return obs
-        
+
 # ===================================
 
 class Agent(nn.Module):
@@ -378,7 +378,7 @@ class Agent(nn.Module):
             action = probs.sample()
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-    
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -409,14 +409,14 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     print("device used:" , device)
-    
+
     # setup AE dimension here
     ae_dim=args.ae_dim
-    
+
     ae_batch_size = args.ae_batch_size
     # control the l2 regularization of the latent vectors
     beta=args.beta
-    
+
     # pretty print the hyperparameters
     # comment this line if you don't want this effect
     pprint(vars(args))
@@ -433,16 +433,16 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
     encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device), 
+        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
         PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
     )
     print(encoder)
     print(decoder)
-    
+
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape).to(device)
+
+    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
 
@@ -460,7 +460,7 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
-    
+
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
@@ -476,10 +476,10 @@ if __name__ == "__main__":
         for step in range(0, args.num_steps):
             global_step += 1 * args.num_envs
             obs[step] = next_obs
-            buffer_ae[buffer_ae_indx] = next_obs
+            buffer_ae[buffer_ae_indx] = next_obs.cpu()
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
-            
+
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
@@ -504,7 +504,7 @@ if __name__ == "__main__":
                     writer.add_scalar("train/rewards", reward[i], global_step)
                     writer.add_scalar("train/success", reward[i] > 0.1, global_step)
                     reward[i] = 0
-            
+
             for item in info:
                 if "episode" in item:
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
@@ -596,21 +596,21 @@ if __name__ == "__main__":
                 nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
                 optimizer.step()
                 encoder_optim.step()
-                
+
                 # training auto encoder
                 current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size, 
+                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                            size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch]
+                ae_batch = buffer_ae[ae_indx_batch].to(device)
                 # flatten
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                # update AE 
+                # update AE
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
                 writer.add_scalar("ae/loss", loss.item(), global_step)
-                
+
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
                 loss.backward()
@@ -623,20 +623,20 @@ if __name__ == "__main__":
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-                            
+
         # for some every step, save the current data for training of AE
-        if (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
+        if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
             os.makedirs("ae_data", exist_ok=True)
             file_path = os.path.join("ae_data", f"step_{global_step}.pt")
             torch.save(buffer_ae[:current_ae_buffer_size], file_path)
-        
+
         # for some every step, save the image reconstructions of AE, for debugging purpose
         if (global_step//args.num_envs) % (args.save_sample_AE_reconstruction_every//args.num_envs) == 0:
             save_reconstruction = reconstruct[0]
             reconstruct = (reconstruct * 255).cpu()
             writer.add_image('image/AE reconstruction', reconstruct)
             writer.add_image('image/original', ae_batch[0].cpu())
-                
+
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
