@@ -139,7 +139,7 @@ def parse_args():
         help="the target KL divergence threshold")
         
     # auto encoder parameters
-    parser.add_argument("--ae-dim", type=int, default=5,
+    parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
     parser.add_argument("--ae-batch-size", type=int, default=256,
         help="AE batch size")
@@ -226,15 +226,16 @@ class PixelEncoder(nn.Module):
         super().__init__()
 
         assert len(obs_shape) == 3
+        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
         
         from torchvision.transforms import Resize
+        self.resize = Resize((84, 84)) # Input image is resized to [64x64]
 
         self.convs = nn.ModuleList(
-            [Resize((84, 84)), # Input image is resized to [64x64]
-            nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
+            [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
             self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
@@ -246,16 +247,16 @@ class PixelEncoder(nn.Module):
         self.outputs = dict()
 
     def forward_conv(self, obs):
+        obs = self.resize(obs)
         obs = obs / 255.
         self.outputs['obs'] = obs
-
-        conv = torch.relu(self.convs[1](self.convs[0](obs)))
+        
+        conv = torch.relu(self.convs[0](obs))
         self.outputs['conv1'] = conv
 
-        for i in range(2, self.num_layers):
+        for i in range(1, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
-
         h = conv.view(conv.size(0), -1)
         return h
 
@@ -431,8 +432,8 @@ if __name__ == "__main__":
         batch = torch.Tensor(batch).to(device)
         latent = encoder(batch)
         reconstruct = decoder(latent)
-        assert batch.shape == reconstruct.shape
-        loss = torch.nn.functional.mse_loss(reconstruct, batch/10) + beta * torch.linalg.norm(latent)
+        assert encoder.outputs['obs'].shape == reconstruct.shape
+        loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
         writer.add_scalar("ae/loss", loss.item(), i)
 
         encoder_optim.zero_grad()
