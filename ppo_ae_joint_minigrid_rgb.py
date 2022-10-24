@@ -431,11 +431,14 @@ if __name__ == "__main__":
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-
+    print(agent)
     encoder, decoder = (
         PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device), 
         PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
     )
+    print(encoder)
+    print(decoder)
+    
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
     

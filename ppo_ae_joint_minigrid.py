@@ -243,20 +243,21 @@ OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=4, num_filters=256):
+    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=128):
         super().__init__()
 
         assert len(obs_shape) == 3
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
+        self.flatten = nn.Flatten()
 
         self.convs = nn.ModuleList(
-            [nn.Flatten(), nn.Linear(np.prod(obs_shape), num_filters)]
+            [nn.Linear(np.prod(obs_shape), num_filters)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Linear(num_filters, num_filters/2))
-            num_filters/=2
+            self.convs.append(nn.Linear(num_filters, num_filters//2))
+            num_filters//=2
         
         self.fc = nn.Linear(num_filters, self.feature_dim)
         self.ln = nn.LayerNorm(self.feature_dim)
@@ -266,6 +267,7 @@ class PixelEncoder(nn.Module):
     def forward_conv(self, obs):
         obs = obs / 10.
         self.outputs['obs'] = obs
+        obs = self.flatten(obs)
 
         conv = torch.relu(self.convs[0](obs))
         self.outputs['conv1'] = conv
@@ -310,11 +312,11 @@ class PixelEncoder(nn.Module):
                 writer.add_image('train_encoder/%s_img' % k, v[0], step)
 
 class PixelDecoder(nn.Module):
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=4, num_filters=256):
+    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=64):
         super().__init__()
 
-        self.num_layers = num_layers/ (2**(num_layers))
-        self.num_filters = num_filters
+        self.num_layers = num_layers
+        self.num_filters = num_filters// (2**(num_layers))
         self.output_dim=obs_shape
 
         self.fc = nn.Linear(
@@ -452,11 +454,13 @@ if __name__ == "__main__":
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-
+    print(agent)
     encoder, decoder = (
         PixelEncoder(envs, envs.single_observation_space.shape, ae_dim).to(device), 
         PixelDecoder(envs, envs.single_observation_space.shape, ae_dim).to(device)
     )
+    print(encoder)
+    print(decoder)
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
     
@@ -481,6 +485,7 @@ if __name__ == "__main__":
     
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
+    prev_time = time.time()
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -663,5 +668,8 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+        if time.time() - prev_time > 300:
+            print(f'[Step: {global_step}/{args.total_timesteps}]')
+            prev_time = time.time()
     envs.close()
     writer.close()
