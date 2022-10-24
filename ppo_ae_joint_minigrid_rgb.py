@@ -163,7 +163,7 @@ def parse_args():
     parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
-        help="buffer size for training ae")
+        help="buffer size for training ae, recommend less than 200k ")
     parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
@@ -442,7 +442,9 @@ if __name__ == "__main__":
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape)
+    args.ae_buffer_size = args.ae_buffer_size//args.num_envs
+
+    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape, dtype=torch.int8)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
 
@@ -601,7 +603,7 @@ if __name__ == "__main__":
                 current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
                 ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                            size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch].to(device)
+                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
                 # flatten
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 # update AE
