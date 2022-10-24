@@ -460,7 +460,7 @@ if __name__ == "__main__":
     
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
-    prev_time=0
+    prev_time=time.time()
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
