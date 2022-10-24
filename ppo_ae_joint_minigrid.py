@@ -460,6 +460,7 @@ if __name__ == "__main__":
     
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
+    prev_time=0
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -650,5 +651,8 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+        if time.time() - prev_time > 300:
+            print(f'[Step: {global_step}/{args.total_timesteps}]')
+            prev_time = time.time()
     envs.close()
     writer.close()
