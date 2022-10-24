@@ -170,6 +170,8 @@ def parse_args():
         help="buffer size for training ae")
     parser.add_argument("--save-ae-training-data-freq", type=int, default=200_000,
         help="Save training AE data buffer every env steps")
+    parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
+        help="Save sample reconstruction from AE every env steps")
     
     
     args = parser.parse_args()
@@ -394,7 +396,7 @@ class Agent(nn.Module):
             action = probs.sample()
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-
+    
 
 if __name__ == "__main__":
     args = parse_args()
@@ -640,10 +642,16 @@ if __name__ == "__main__":
                     break
                             
         # for some every step, save the current data for training of AE
-        if (global_step/args.num_envs) % (args.save_ae_training_data_freq/args.num_envs) == 0:
+        if (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
             os.makedirs("ae_data", exist_ok=True)
             file_path = os.path.join("ae_data", f"step_{global_step}.pt")
             torch.save(buffer_ae[:current_ae_buffer_size], file_path)
+        
+        # for some every step, save the image reconstructions of AE, for debugging purpose
+        if (global_step//args.num_envs) % (args.save_sample_AE_reconstruction_every//args.num_envs) == 0:
+            save_reconstruction = reconstruct[0]
+            img = 
+                
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)

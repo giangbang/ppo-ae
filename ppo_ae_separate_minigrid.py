@@ -177,7 +177,8 @@ class TransposeImageWrapper(gym.ObservationWrapper):
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
+        env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
         env = TransposeImageWrapper(env)
   
@@ -221,33 +222,37 @@ OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
+        
+        from torchvision.transforms import Resize
 
         self.convs = nn.ModuleList(
-            [nn.Flatten(), nn.Linear(np.prod(obs_shape), num_filters)]
+            [Resize((84, 84)), # Input image is resized to [64x64]
+            nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Linear(num_filters, num_filters))
-        
-        self.fc = nn.Linear(num_filters, self.feature_dim)
+            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
+
+        out_dim = OUT_DIM[num_layers]
+        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
         self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
     def forward_conv(self, obs):
-        obs = obs / 10.
+        obs = obs / 255.
         self.outputs['obs'] = obs
 
-        conv = torch.relu(self.convs[0](obs))
+        conv = torch.relu(self.convs[1](self.convs[0](obs)))
         self.outputs['conv1'] = conv
 
-        for i in range(1, self.num_layers):
+        for i in range(2, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
 
@@ -277,36 +282,27 @@ class PixelEncoder(nn.Module):
         for i in range(self.num_layers):
             tie_weights(src=source.convs[i], trg=self.convs[i])
 
-    def log(self, writer, step, log_freq):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            writer.add_histogram('train_encoder/%s_hist' % k, v, step)
-            if len(v.shape) > 2:
-                writer.add_image('train_encoder/%s_img' % k, v[0], step)
-
 class PixelDecoder(nn.Module):
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        self.output_dim=obs_shape
+        self.out_dim = OUT_DIM[num_layers]
 
         self.fc = nn.Linear(
-            feature_dim, num_filters
+            feature_dim, num_filters * self.out_dim * self.out_dim
         )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.Linear(num_filters, num_filters)
+                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
             )
         self.deconvs.append(
-            nn.Linear(
-                num_filters, np.prod(obs_shape)
+            nn.ConvTranspose2d(
+                num_filters, obs_shape[0], 3, stride=2, output_padding=1
             )
         )
 
@@ -316,8 +312,7 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        # deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
-        deconv = h
+        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
@@ -325,38 +320,28 @@ class PixelDecoder(nn.Module):
             self.outputs['deconv%s' % (i + 1)] = deconv
 
         obs = self.deconvs[-1](deconv)
-        obs = obs.view(obs.shape[0], *self.output_dim)
         self.outputs['obs'] = obs
 
         return obs
 
-    def log(self, writer, step, log_freq):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            writer.add_histogram('train_decoder/%s_hist' % k, v, step)
-            if len(v.shape) > 2:
-                writer.add_image('train_decoder/%s_i' % k, v[0], step)
-
 # ===================================
 
 class Agent(nn.Module):
-    def __init__(self, envs, obs_shape ):
+    def __init__(self, envs, obs_shape, hidden_dim=64):
         super().__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(hidden_dim, 1), std=1.0),
         )
         self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
+            layer_init(nn.Linear(hidden_dim, envs.single_action_space.n), std=0.01),
         )
 
     def get_value(self, x):
@@ -398,6 +383,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    print("device used:" , device)
     
     # setup AE dimension here
     ae_dim=args.ae_dim
@@ -422,8 +408,8 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     encoder, decoder = (
-        PixelEncoder(envs, envs.single_observation_space.shape, ae_dim).to(device), 
-        PixelDecoder(envs, envs.single_observation_space.shape, ae_dim).to(device)
+        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device), 
+        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
     )
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -455,6 +441,19 @@ if __name__ == "__main__":
         encoder_optim.step()
         decoder_optim.step()
     print("done train ae")
+    # save sample reconstruction 
+    # take random 5 images from buffer
+    indices = np.random.randint(0, len(ae_dataset), 5)
+    batch = ae_dataset[indices]
+    batch = torch.Tensor(batch).to(device)
+    latent = encoder(batch)
+    reconstruct = decoder(latent)
+    reconstruct = (reconstruct * 255).cpu()
+    
+    # log the reconstruct image
+    for o, r in zip(batch.cpu(), reconstruct.cpu()):
+        writer.add_image('image/AE reconstruction', r)
+        writer.add_image('image/original', o)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs, args.ae_dim)).to(device)
