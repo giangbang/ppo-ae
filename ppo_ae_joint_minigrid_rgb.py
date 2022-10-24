@@ -229,7 +229,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-# Copy from SAC AE
+# Modified from SAC AE
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
@@ -242,7 +242,7 @@ OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=6):
         super().__init__()
 
         assert len(obs_shape) == 3
@@ -252,16 +252,24 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((84, 84)) # Input image is resized to [64x64]
+        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
+            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
+            num_filters*=2
 
-        out_dim = OUT_DIM[num_layers]
-        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
+        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
+
+        with torch.no_grad():
+            for conv in self.convs:
+                dummy_input = conv(dummy_input)
+
+        output_size = np.prod(dummy_input.shape)
+        OUT_DIM[num_layers] = dummy_input.shape[1:]
+        self.fc = nn.Linear(output_size, self.feature_dim)
         self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
@@ -304,26 +312,28 @@ class PixelEncoder(nn.Module):
             tie_weights(src=source.convs[i], trg=self.convs[i])
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=6):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        self.out_dim = OUT_DIM[num_layers]
+        num_filters *= 2**(num_layers-1)
+        self.out_dim = np.prod(OUT_DIM[num_layers])
 
         self.fc = nn.Linear(
-            feature_dim, num_filters * self.out_dim * self.out_dim
+            feature_dim, self.out_dim
         )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
+                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
             )
+            num_filters //= 2
         self.deconvs.append(
             nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2, output_padding=1
+                num_filters, obs_shape[0], 3, stride=2,output_padding=1
             )
         )
 
@@ -333,7 +343,7 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
+        deconv = h.view(-1, *OUT_DIM[self.num_layers])
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
