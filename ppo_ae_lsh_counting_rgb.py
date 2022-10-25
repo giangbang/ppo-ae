@@ -628,9 +628,13 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
+                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
                 # adjacent l2 loss
-                loss = loss + args.alpha * torch.linalg.norm(latent - next_latent)
+                adjacent_loss = args.alpha * torch.linalg.norm(latent - next_latent)
+                writer.add_scalar("ae/adjacent_loss", adjacent_loss.item(), global_step)
+                # aggregate
+                loss = adjacent_loss + reconstruct_loss
                 writer.add_scalar("ae/loss", loss.item(), global_step)
 
                 encoder_optim.zero_grad()
