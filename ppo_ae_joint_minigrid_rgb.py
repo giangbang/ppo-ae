@@ -672,3 +672,8 @@ if __name__ == "__main__":
             prev_time = time.time()
     envs.close()
     writer.close()
+    torch.save({
+        'agent': agent.state_dict(),
+        'encoder': encoder,
+        'decoder': decoder
+    }, 'weights.pt')
