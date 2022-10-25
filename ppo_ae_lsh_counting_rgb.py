@@ -659,8 +659,8 @@ if __name__ == "__main__":
         # for some every step, save the image reconstructions of AE, for debugging purpose
         if (global_step//args.num_envs) % (args.save_sample_AE_reconstruction_every//args.num_envs) == 0:
             save_reconstruction = reconstruct[0]
-            reconstruct = (reconstruct * 255).cpu()
-            writer.add_image('image/AE reconstruction', reconstruct)
+            save_reconstruction = (save_reconstruction * 255).cpu()
+            writer.add_image('image/AE reconstruction', save_reconstruction)
             writer.add_image('image/original', ae_batch[0].cpu())
 
 
