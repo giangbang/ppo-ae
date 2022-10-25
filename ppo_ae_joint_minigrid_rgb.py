@@ -476,6 +476,7 @@ if __name__ == "__main__":
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
+    prev_global_timestep = 0
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -643,12 +644,12 @@ if __name__ == "__main__":
             torch.save(buffer_ae[:current_ae_buffer_size], file_path)
 
         # for some every step, save the image reconstructions of AE, for debugging purpose
-        if (global_step//args.num_envs) % (args.save_sample_AE_reconstruction_every//args.num_envs) == 0:
+        if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
             save_reconstruction = reconstruct[0]
             reconstruct = (reconstruct * 255).cpu()
             writer.add_image('image/AE reconstruction', reconstruct)
             writer.add_image('image/original', ae_batch[0].cpu())
-
+            prev_global_timestep = global_step
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
