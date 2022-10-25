@@ -457,7 +457,7 @@ if __name__ == "__main__":
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape, dtype=torch.int8)
-    done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
+    # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
 
@@ -492,7 +492,7 @@ if __name__ == "__main__":
             global_step += 1 * args.num_envs
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
-            done_buffer[buffer_ae_indx] = next_done.cpu()
+            # done_buffer[buffer_ae_indx] = next_done.cpu()
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
