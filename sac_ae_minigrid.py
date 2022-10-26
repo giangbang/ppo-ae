@@ -67,6 +67,21 @@ def parse_args():
             help="Entropy regularization coefficient.")
     parser.add_argument("--autotune", type=lambda x:bool(strtobool(x)), default=True, nargs="?", const=True,
         help="automatic tuning of the entropy coefficient")
+        
+    # auto encoder parameters
+    parser.add_argument("--ae-dim", type=int, default=50,
+        help="number of hidden dim in ae")
+    parser.add_argument("--beta", type=float, default=0.0001,
+        help="L2 norm of the latent vectors")
+    parser.add_argument("--adjacent_coef", type=float, default=.1,
+        help="coefficient for L2 norm of adjacent states")
+    parser.add_argument("--ae-buffer-size", type=int, default=100_000,
+        help="buffer size for training ae, recommend less than 200k ")
+    parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
+        help="Save training AE data buffer every env steps")
+    parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
+        help="Save sample reconstruction from AE every env steps")
+
     args = parser.parse_args()
     # fmt: on
     return args
