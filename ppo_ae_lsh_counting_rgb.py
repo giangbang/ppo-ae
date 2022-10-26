@@ -403,12 +403,12 @@ class Simhash:
     A = None
     
     @classmethod
-    def hash(input: torch.Tensor, hash_bit: int, device=None):
+    def hash(cls, input: torch.Tensor, hash_bit: int, device=None):
         if len(input.shape) < 2: input = input.unsqueeze(0)
         assert len(input.shape) == 2
         if not device: device = input.device
         
-        if not Simhash.A:
+        if Simhash.A is None:
             Simhash.A = torch.randn(input.shape[-1], hash_bit).to(device)
             
         mm = torch.matmul(input, Simhash.A)
