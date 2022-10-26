@@ -170,6 +170,14 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
+        
+    # count-based parameters
+    parser.add_argument("--hash-bit", type=int, default=-1,
+        help="Number of bits used in Simhash, default is -1, automatically set according to `total-timesteps`")
+    parser.add_argument("--ucb-coef", type=float, default=1,
+        help="coefficient for ucb intrinsic reward")
+    parser.add_argument("--ae-warmup-steps", type=int, default=1000,
+        help="Warmup phase for VAE, states visited in these first warmup steps are not counted for UCB")
 
 
     args = parser.parse_args()
@@ -391,6 +399,28 @@ class Agent(nn.Module):
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
+class Simhash:
+    A = None
+    
+    @classmethod
+    def hash(input: torch.Tensor, hash_bit: int, device=None):
+        if len(input.shape) < 2: input = input.unsqueeze(0)
+        assert len(input.shape) == 2
+        if not device: device = input.device
+        
+        if not Simhash.A:
+            Simhash.A = torch.randn(input.shape[-1], hash_bit).to(device)
+            
+        mm = torch.matmul(input, Simhash.A)
+        bits = mm >= 0
+        
+        power = 2**torch.arange(hash_bit).to(device)
+        power = power.unsqueeze(0)
+        hash = (power * bits).sum(dim=-1)
+        return hash.type(torch.long)
+    
+def ucb(count: torch.Tensor, total_count: int):
+    return np.log(total_count) / (torch.sqrt(count) + 1e-3)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -460,6 +490,12 @@ if __name__ == "__main__":
     # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
+    
+    # HASH table
+    if args.hash_bit < 0:
+        args.hash_bit = int(np.log2(args.total_timesteps / 100))
+        print(f"Automatically set number of hash bit to {args.hash_bit}")
+    hash_table = torch.zeros((2**args.hash_bit,), dtype=torch.int32)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -510,10 +546,21 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+            
+            # UCB rewards
+            if global_step > args.ae_warmup_steps:
+                # Compute counts
+                next_embedding = encoder(next_obs)
+                hash_code = Simhash.hash(next_embedding, hash_bit=args.hash_bit)
+                hash_table[hash_code] += 1
+                state_counts = hash_table[hash_code].to(device)
+                intrinsic_reward = ucb(state_counts, global_step)
+                rewards[step] += args.ucb_coef * intrinsic_reward.view(-1)
 
             # log success and rewards
             for i, d in enumerate(done):
