@@ -677,12 +677,15 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
+                latent_norm = torch.linalg.norm(latent, dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) +
-                        beta * torch.linalg.norm(latent, dim=-1).mean()
+                        beta * latent_norm
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
+                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
-                adjacent_loss = args.alpha * torch.linalg.norm(latent - next_latent, dim=-1).mean()
-                writer.add_scalar("ae/adjacent_loss", adjacent_loss.item(), global_step)
+                adjacent_norm = torch.linalg.norm(latent - next_latent, dim=-1).mean()
+                adjacent_loss = args.alpha * adjacent_norm
+                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
                 # aggregate
                 loss = adjacent_loss + reconstruct_loss
                 writer.add_scalar("ae/loss", loss.item(), global_step)
