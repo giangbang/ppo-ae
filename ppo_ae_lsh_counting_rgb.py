@@ -170,7 +170,7 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-        
+
     # count-based parameters
     parser.add_argument("--hash-bit", type=int, default=-1,
         help="Number of bits used in Simhash, default is -1, automatically set according to `total-timesteps`")
@@ -401,24 +401,24 @@ class Agent(nn.Module):
 
 class Simhash:
     A = None
-    
+
     @classmethod
     def hash(cls, input: torch.Tensor, hash_bit: int, device=None):
         if len(input.shape) < 2: input = input.unsqueeze(0)
         assert len(input.shape) == 2
         if not device: device = input.device
-        
+
         if Simhash.A is None:
             Simhash.A = torch.randn(input.shape[-1], hash_bit).to(device)
-            
+
         mm = torch.matmul(input, Simhash.A)
         bits = mm >= 0
-        
+
         power = 2**torch.arange(hash_bit).to(device)
         power = power.unsqueeze(0)
         hash = (power * bits).sum(dim=-1)
         return hash.type(torch.long)
-    
+
 def ucb(count: torch.Tensor, total_count: int):
     return np.log(total_count) / (torch.sqrt(count) + 1e-3)
 
@@ -490,7 +490,7 @@ if __name__ == "__main__":
     # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
-    
+
     # HASH table
     if args.hash_bit < 0:
         args.hash_bit = int(np.log2(args.total_timesteps / 100))
@@ -546,12 +546,12 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
-            
+
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-            
+
             # UCB rewards
             if global_step > args.ae_warmup_steps:
                 # Compute counts
@@ -677,10 +677,11 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) +
+                        beta * torch.linalg.norm(latent, dim=-1).mean()
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
                 # adjacent l2 loss
-                adjacent_loss = args.alpha * torch.linalg.norm(latent - next_latent)
+                adjacent_loss = args.alpha * torch.linalg.norm(latent - next_latent, dim=-1).mean()
                 writer.add_scalar("ae/adjacent_loss", adjacent_loss.item(), global_step)
                 # aggregate
                 loss = adjacent_loss + reconstruct_loss
