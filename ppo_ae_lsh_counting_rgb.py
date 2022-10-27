@@ -708,8 +708,8 @@ if __name__ == "__main__":
         if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
             save_reconstruction = reconstruct[0].detach()
             save_reconstruction = (save_reconstruction * 255).cpu()
-            writer.add_image('image/AE reconstruction', save_reconstruction)
-            writer.add_image('image/original', ae_batch[0].cpu())
+            writer.add_image('image/AE reconstruction', save_reconstruction, global_step)
+            writer.add_image('image/original', ae_batch[0].cpu(), global_step)
             prev_global_timestep = global_step
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
