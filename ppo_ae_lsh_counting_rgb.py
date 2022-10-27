@@ -678,8 +678,7 @@ if __name__ == "__main__":
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 latent_norm = torch.linalg.norm(latent, dim=-1).mean()
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) +
-                        beta * latent_norm
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
                 writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
