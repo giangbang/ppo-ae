@@ -286,7 +286,7 @@ class PixelEncoder(nn.Module):
 
     def forward_conv(self, obs):
         obs = self.resize(obs)
-        obs = obs / 255.
+        obs = (obs -128)/ 128.
         self.outputs['obs'] = obs
 
         conv = torch.relu(self.convs[0](obs))
@@ -555,7 +555,8 @@ if __name__ == "__main__":
             # UCB rewards
             if global_step > args.ae_warmup_steps:
                 # Compute counts
-                next_embedding = encoder(next_obs)
+                with torch.no_grad():
+                    next_embedding = encoder(next_obs)
                 hash_code = Simhash.hash(next_embedding, hash_bit=args.hash_bit)
                 hash_table[hash_code] += 1
                 state_counts = hash_table[hash_code].to(device)
