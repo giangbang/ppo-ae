@@ -300,7 +300,8 @@ class PixelEncoder(nn.Module):
         h_norm = self.ln(h_fc)
         self.outputs['ln'] = h_norm
 
-        out = torch.tanh(h_norm)
+        # out = torch.tanh(h_norm)
+        out = h_norm
         self.outputs['tanh'] = out
 
         return out
@@ -362,16 +363,16 @@ class Agent(nn.Module):
         super().__init__()
         self.critic = nn.Sequential(
             layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, 1), std=1.0),
         )
         self.actor = nn.Sequential(
             layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, envs.single_action_space.n), std=0.01),
         )
 
