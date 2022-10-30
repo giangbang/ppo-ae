@@ -421,7 +421,7 @@ class Simhash:
         return hash.type(torch.long)
 
 def ucb(count: torch.Tensor, total_count: int):
-    return np.log(total_count) / (torch.sqrt(count) + 1e-3)
+    return np.log(total_count) / (count + 1e-3)
 
 if __name__ == "__main__":
     args = parse_args()
