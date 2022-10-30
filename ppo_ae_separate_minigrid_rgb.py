@@ -34,7 +34,7 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
         self.maxStrLen = maxStrLen
         self.numCharCodes = 27
 
-        if isinstance(env.observation_space, spaces.Dict): 
+        if isinstance(env.observation_space, spaces.Dict):
             imgSpace = env.observation_space.spaces['image']
         else:
             imgSpace = env.observation_space
@@ -49,13 +49,13 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
 
         self.cachedStr = None
         self.cachedArray = None
-        
+
     def observation(self, obs):
         if isinstance(obs, dict):
             return self._observation(obs)
         return obs.flatten()
 
-    
+
     def _observation(self, obs):
         image = obs['image']
         mission = obs['mission']
@@ -137,7 +137,7 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-        
+
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
@@ -149,7 +149,7 @@ def parse_args():
         help="number of random exploration steps to collect data to train ae")
     parser.add_argument("--beta", type=float, default=0.01,
         help="L2 norm of the latent vectors")
-    
+
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -181,10 +181,10 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
         env = TransposeImageWrapper(env)
-  
+
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int), 
+            low=np.zeros(shape=env.observation_space.shape,dtype=int),
             high=np.ones(shape=env.observation_space.shape,dtype=int)*255
         )
         print("obs shape", np.array(env.reset()[0]).shape)
@@ -230,7 +230,7 @@ class PixelEncoder(nn.Module):
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to [64x64]
 
@@ -250,7 +250,7 @@ class PixelEncoder(nn.Module):
         obs = self.resize(obs)
         obs = obs / 255.
         self.outputs['obs'] = obs
-        
+
         conv = torch.relu(self.convs[0](obs))
         self.outputs['conv1'] = conv
 
@@ -272,7 +272,8 @@ class PixelEncoder(nn.Module):
         h_norm = self.ln(h_fc)
         self.outputs['ln'] = h_norm
 
-        out = torch.tanh(h_norm)
+        # out = torch.ReLU(h_norm)
+        out = h_norm
         self.outputs['tanh'] = out
 
         return out
@@ -385,7 +386,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     print("device used:" , device)
-    
+
     # setup AE dimension here
     ae_dim=args.ae_dim
     # setup random timesteps to collect data for training AE (prior to training of PPO)
@@ -409,7 +410,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device), 
+        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
         PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
     )
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -442,7 +443,7 @@ if __name__ == "__main__":
         encoder_optim.step()
         decoder_optim.step()
     print("done train ae")
-    # save sample reconstruction 
+    # save sample reconstruction
     # take random 5 images from buffer
     indices = np.random.randint(0, len(ae_dataset), 5)
     batch = ae_dataset[indices]
@@ -450,7 +451,7 @@ if __name__ == "__main__":
     latent = encoder(batch)
     reconstruct = decoder(latent)
     reconstruct = (reconstruct * 255).cpu()
-    
+
     # log the reconstruct image
     for o, r in zip(batch.cpu(), reconstruct.cpu()):
         writer.add_image('image/AE reconstruction', r)
@@ -470,7 +471,7 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
-    
+
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
 
@@ -510,7 +511,7 @@ if __name__ == "__main__":
                     writer.add_scalar("train/rewards", reward[i], global_step)
                     writer.add_scalar("train/success", reward[i] > 0.1, global_step)
                     reward[i] = 0
-            
+
             for item in info:
                 if "episode" in item:
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")

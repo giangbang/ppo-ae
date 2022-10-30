@@ -302,7 +302,7 @@ class PixelEncoder(nn.Module):
 
         # out = torch.tanh(h_norm)
         out = h_norm
-        self.outputs['tanh'] = out
+        self.outputs['latent'] = out
 
         return out
 
@@ -648,10 +648,18 @@ if __name__ == "__main__":
 
         # for some every step, save the image reconstructions of AE, for debugging purpose
         if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
+            # AE reconstruction
             save_reconstruction = reconstruct[0].detach()
             save_reconstruction = (save_reconstruction*128 + 128).cpu().clip(0, 255)
+
+            # AE target
+            ae_target = encoder.outputs['obs'][0].detach().cpu()
+            ae_target = (ae_target*128 + 128).cpu().clip(0, 255)
+
+            # log
             writer.add_image('image/AE reconstruction', save_reconstruction.type(torch.uint8), global_step)
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
+            writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()

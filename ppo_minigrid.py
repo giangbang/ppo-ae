@@ -79,7 +79,7 @@ def parse_args():
         help="the target KL divergence threshold")
     parser.add_argument("--save-model-freq", type=int, default=200_000,
         help="Save model every env steps")
-        
+
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -99,7 +99,7 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
         self.maxStrLen = maxStrLen
         self.numCharCodes = 27
 
-        if isinstance(env.observation_space, spaces.Dict): 
+        if isinstance(env.observation_space, spaces.Dict):
             imgSpace = env.observation_space.spaces['image']
         else:
             imgSpace = env.observation_space
@@ -116,12 +116,12 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
 
         self.cachedStr = None
         self.cachedArray = None
-        
+
     def observation(self, obs):
         if isinstance(obs, dict):
             return self._observation(obs)
         return obs.flatten()
-    
+
     def _observation(self, obs):
         image = obs['image']
         mission = obs['mission']
@@ -155,10 +155,10 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
         env = ImgObsWrapper(env)
         env = CustomFlatObsWrapper(env)
-  
+
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int), 
+            low=np.zeros(shape=env.observation_space.shape,dtype=int),
             high=np.ones(shape=env.observation_space.shape,dtype=int)*10
         )
         print("obs shape", np.array(env.reset()[0]).shape)
@@ -190,16 +190,16 @@ class Agent(nn.Module):
         super().__init__()
         self.critic = nn.Sequential(
             layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor = nn.Sequential(
             layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
         )
 
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
-    
+
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
 
@@ -296,7 +296,7 @@ if __name__ == "__main__":
             done = np.bitwise_or(terminate, truncate)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-            
+
             for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
