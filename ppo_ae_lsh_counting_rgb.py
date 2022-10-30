@@ -280,7 +280,7 @@ class PixelEncoder(nn.Module):
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
         self.fc = nn.Linear(output_size, self.feature_dim)
-        self.ln = nn.LayerNorm(self.feature_dim)
+        # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
@@ -307,11 +307,11 @@ class PixelEncoder(nn.Module):
         h_fc = self.fc(h)
         self.outputs['fc'] = h_fc
 
-        h_norm = self.ln(h_fc)
-        self.outputs['ln'] = h_norm
+        # h_norm = self.ln(h_fc)
+        # self.outputs['ln'] = h_norm
 
         # out = torch.ReLU(h_norm)
-        out = h_norm
+        out = h_fc
         self.outputs['latent'] = out
 
         return out
@@ -487,7 +487,8 @@ if __name__ == "__main__":
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
 
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape, dtype=torch.int8)
+    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
+                dtype=torch.uint8)
     # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
@@ -678,12 +679,12 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                latent_norm = torch.linalg.norm(latent, dim=-1).mean()
+                latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
                 writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
-                adjacent_norm = torch.linalg.norm(latent - next_latent, dim=-1).mean()
+                adjacent_norm = ((latent-next_latent)**2).sum(dim=-1).mean()
                 adjacent_loss = args.alpha * adjacent_norm
                 writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
                 # aggregate
@@ -711,10 +712,18 @@ if __name__ == "__main__":
 
         # for some every step, save the image reconstructions of AE, for debugging purpose
         if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
+            # AE reconstruction
             save_reconstruction = reconstruct[0].detach()
-            save_reconstruction = (save_reconstruction*128 + 128).cpu().clip(0, 255)
+            save_reconstruction = (save_reconstruction*128 + 128).clip(0, 255).cpu()
+
+            # AE target
+            ae_target = encoder.outputs['obs'][0].detach()
+            ae_target = (ae_target*128 + 128).clip(0, 255).cpu()
+
+            # log
             writer.add_image('image/AE reconstruction', save_reconstruction.type(torch.uint8), global_step)
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
+            writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()

@@ -456,7 +456,8 @@ if __name__ == "__main__":
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
 
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape)
+    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
+                dtype=torch.uint8)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
 

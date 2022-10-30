@@ -270,7 +270,7 @@ class PixelEncoder(nn.Module):
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
         self.fc = nn.Linear(output_size, self.feature_dim)
-        self.ln = nn.LayerNorm(self.feature_dim)
+        # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
@@ -297,11 +297,11 @@ class PixelEncoder(nn.Module):
         h_fc = self.fc(h)
         self.outputs['fc'] = h_fc
 
-        h_norm = self.ln(h_fc)
-        self.outputs['ln'] = h_norm
+        # h_norm = self.ln(h_fc)
+        # self.outputs['ln'] = h_norm
 
         # out = torch.tanh(h_norm)
-        out = h_norm
+        out = h_fc
         self.outputs['latent'] = out
 
         return out
