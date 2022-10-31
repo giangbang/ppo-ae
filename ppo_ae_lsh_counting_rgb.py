@@ -178,6 +178,8 @@ def parse_args():
         help="coefficient for ucb intrinsic reward")
     parser.add_argument("--ae-warmup-steps", type=int, default=1000,
         help="Warmup phase for VAE, states visited in these first warmup steps are not counted for UCB")
+    parser.add_argument("--save-count-histogram-every", type=int, default=5_000,
+        help="Interval to save the histogram of the count table")
 
 
     args = parser.parse_args()
@@ -564,6 +566,10 @@ if __name__ == "__main__":
                 state_counts = hash_table[hash_code].to(device)
                 intrinsic_reward = ucb(state_counts, global_step)
                 rewards[step] += args.ucb_coef * intrinsic_reward.view(-1)
+                
+                # log histogram of count table
+                if (global_step//args.num_envs)%(args.save_count_histogram_every//args.num_envs)==0:
+                    writer.add_histogram("counts/count_histogram", hash_table, global_step)
 
             # log success and rewards
             for i, d in enumerate(done):
