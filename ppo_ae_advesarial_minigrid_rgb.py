@@ -176,7 +176,7 @@ def parse_args():
         help="coefficient for intrinsic reward")
     parser.add_argument("--ae-warmup-steps", type=int, default=1000,
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
-    
+
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -471,8 +471,6 @@ if __name__ == "__main__":
     # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
-    
-    hash_table = torch.zeros((2**args.hash_bit,), dtype=torch.int32)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -536,11 +534,11 @@ if __name__ == "__main__":
                     prev_embedding = next_embedding
                     next_embedding = encoder(next_obs)
                     latent_distance = ((prev_embedding-next_embedding)**2).sum(dim=-1)
-                
+
                 intrinsic_reward = intrinsic_rw(latent_distance)
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
-                
+
                 writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward, global_step)
 
             # log success and rewards
