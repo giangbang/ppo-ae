@@ -539,7 +539,7 @@ if __name__ == "__main__":
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
-                writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward, global_step)
+                writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward.mean(), global_step)
 
             # log success and rewards
             for i, d in enumerate(done):
