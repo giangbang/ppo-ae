@@ -531,7 +531,7 @@ if __name__ == "__main__":
             if global_step > args.ae_warmup_steps:
                 # Compute counts
                 with torch.no_grad():
-                    prev_embedding = next_embedding.copy()
+                    prev_embedding = next_embedding
                     next_embedding = encoder(next_obs)
                     if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
