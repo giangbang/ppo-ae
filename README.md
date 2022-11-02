@@ -50,3 +50,4 @@ python ppo_ae_joint_minigrid_rgb.py --env-id MiniGrid-SimpleCrossingS9N1-v0 --ex
 results
 ![training losses](/img/loss.png "Training losses")
 ![training rewards](/img/reward.png "Training rewards")
+![Legend](/img/legend.png "Legend")
