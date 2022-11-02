@@ -48,5 +48,5 @@ python ppo_ae_joint_minigrid_rgb.py --env-id MiniGrid-SimpleCrossingS9N1-v0 --ex
               --seed 1 --beta 0.0001 --ae-buffer-size 200_000 --save-sample-AE-reconstruction-every 1_000
 ```
 results
-![training losses](/data/loss.png "Training losses")
-![training rewards](/data/reward.png "Training rewards")
+![training losses](/img/loss.png "Training losses")
+![training rewards](/img/reward.png "Training rewards")
