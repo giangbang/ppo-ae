@@ -30,7 +30,8 @@ python -m tensorboard.main --logdir=./
 ## Results
 All of the experiments are run with image observation space
 run with adversarial exploration
-```python ppo_ae_advesarial_minigrid_rgb.py --env-id MiniGrid-SimpleCrossingS9N1-v0 --exp-name ppo_with_ae_adversarial_exploration \
+```
+python ppo_ae_advesarial_minigrid_rgb.py --env-id MiniGrid-SimpleCrossingS9N1-v0 --exp-name ppo_with_ae_adversarial_exploration \
               --total-timesteps 500_000 --learning-rate 1e-3 --ae-dim 50 \
               --seed 1 --beta 0.0001 --ae-buffer-size 200_000 --save-sample-AE-reconstruction-every 1_000 \
               --adv-rw-coef 1
