@@ -19,6 +19,7 @@ pip install -r requirements.txt
 - [ ] `ppo_ae_joint_minigrid.py`
 - [ ] `ppo_minigrid.py`
 - [x] `ppo_minigrid_rgb.py`
+- [x] `ppo_ae_advesarial_minigrid_rgb.py`
 
 ## Run
 ```

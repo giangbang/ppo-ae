@@ -532,7 +532,7 @@ if __name__ == "__main__":
             for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
-                    writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
                     rewards_all[i] = 0
 
             for item in info:
