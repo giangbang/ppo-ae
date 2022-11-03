@@ -279,11 +279,11 @@ class PixelEncoder(nn.Module):
 
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Sequential([
+        self.fc = nn.Sequential(
             nn.Linear(output_size, output_size),
             nn.ReLU(),
             nn.Linear(output_size, self.feature_dim),
-        ])
+        )
         # self.fc = nn.Linear(output_size, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
@@ -336,11 +336,11 @@ class PixelDecoder(nn.Module):
         num_filters *= 2**(num_layers-1)
         self.out_dim = np.prod(OUT_DIM[num_layers])
 
-        self.fc = nn.Sequential([
+        self.fc = nn.Sequential(
             nn.Linear(feature_dim, self.out_dim),
             nn.ReLU(),
             nn.Linear(self.out_dim, self.out_dim),
-        ])
+        )
         # self.fc = nn.Linear(
             # feature_dim, self.out_dim
         # )
