@@ -423,24 +423,24 @@ def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
     import torch
 
     indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    samples = ae_buffer[indx].view(-1, ae_buffer.shape[2:])
+    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
 
     samples = samples.float().to(device)
     with torch.no_grad():
         encodings = encoder(samples).cpu().numpy()
 
-    hashes = hash_vals[indx].view(-1)
+    hashes = hash_vals[indx].reshape(-1)
+    assert len(hashes) == len(samples)
     cnt_map = [count_table.get(h, 0) for h in hashes]
-    cnt_map = np.array(cnt_map)
-    cnt_map /= np.max(cnt_map)
+    cnt_map = np.array(cnt_map, dtype=np.float32)
+    cnt_map /= np.max(cnt_map) + 1e-3
 
     X_embedded = TSNE(n_components=2, learning_rate='auto',
                    init='random', perplexity=3).fit_transform(encodings)
-    vfunc = np.vectorize(plt.cm.jet)
-    colors = vfunc(cnt_map)
-    c = np.concatenate(colors, axis=-1)
-    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=c)
+
+    plt.figure()
     plt.jet()
+    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=cnt_map, edgecolors='black')
     cb = plt.colorbar()
     cb.set_label('visitation counts')
     plt.savefig(f'encodings_{global_step}.png')
@@ -513,6 +513,7 @@ if __name__ == "__main__":
     count table and hash values
     """
     count_table = {}
+    # using numpy array since torch tensor does not support object type
     hash_vals = np.empty((args.ae_buffer_size, args.num_envs), dtype='O')
     hash_size=64
 
@@ -782,8 +783,8 @@ if __name__ == "__main__":
             print(f'[Step: {global_step}/{args.total_timesteps}]')
             prev_time = time.time()
             """ visualize the encoding with count values """
-            visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=500//args.num_envs)
+            visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
+                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs)
     envs.close()
     writer.close()
 
@@ -794,5 +795,5 @@ if __name__ == "__main__":
     }, 'weights.pt')
 
     """ visualize the encoding with count values """
-    visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=500//args.num_envs)
+    visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
+                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs)
