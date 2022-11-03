@@ -273,7 +273,7 @@ class PixelEncoder(nn.Module):
         OUT_DIM[num_layers] = dummy_input.shape[1:]
         self.fc = nn.Sequential([
             nn.Linear(output_size, output_size),
-            nn.ReLU()
+            nn.ReLU(),
             nn.Linear(output_size, self.feature_dim),
         ])
         # self.fc = nn.Linear(output_size, self.feature_dim)
@@ -331,7 +331,7 @@ class PixelDecoder(nn.Module):
 
         self.fc = nn.Sequential([
             nn.Linear(feature_dim, self.out_dim),
-            nn.ReLU()
+            nn.ReLU(),
             nn.Linear(self.out_dim, self.out_dim),
         ])
         # self.fc = nn.Linear(
