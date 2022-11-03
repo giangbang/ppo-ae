@@ -269,7 +269,12 @@ class PixelEncoder(nn.Module):
 
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Linear(output_size, self.feature_dim)
+        self.fc = nn.Sequential([
+            nn.Linear(output_size, output_size),
+            nn.ReLU()
+            nn.Linear(output_size, self.feature_dim),
+        ])
+        # self.fc = nn.Linear(output_size, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
@@ -321,9 +326,14 @@ class PixelDecoder(nn.Module):
         num_filters *= 2**(num_layers-1)
         self.out_dim = np.prod(OUT_DIM[num_layers])
 
-        self.fc = nn.Linear(
-            feature_dim, self.out_dim
-        )
+        self.fc = nn.Sequential([
+            nn.Linear(feature_dim, self.out_dim),
+            nn.ReLU()
+            nn.Linear(self.out_dim, self.out_dim),
+        ])
+        # self.fc = nn.Linear(
+            # feature_dim, self.out_dim
+        # )
 
         self.deconvs = nn.ModuleList()
 
@@ -352,6 +362,7 @@ class PixelDecoder(nn.Module):
             self.outputs['deconv%s' % (i + 1)] = deconv
 
         obs = self.deconvs[-1](deconv)
+        obs = torch.tanh(obs)
         self.outputs['obs'] = obs
 
         return obs
@@ -448,8 +459,6 @@ if __name__ == "__main__":
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    args.ae_buffer_size = args.ae_buffer_size//args.num_envs
-
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
@@ -502,9 +511,9 @@ if __name__ == "__main__":
             # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", reward[i], global_step)
-                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
-                    reward[i] = 0
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] >= 0.05, global_step)
+                    rewards_all[i] = 0
 
             for item in info:
                 if "episode" in item:

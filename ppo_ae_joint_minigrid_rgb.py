@@ -168,6 +168,8 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
+    parser.add_argument("--weight-decay", type=float, default=0.,
+        help="L2 norm of the weight vectors of decoder")
 
 
     args = parser.parse_args()
@@ -269,7 +271,12 @@ class PixelEncoder(nn.Module):
 
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Linear(output_size, self.feature_dim)
+        self.fc = nn.Sequential([
+            nn.Linear(output_size, output_size),
+            nn.ReLU()
+            nn.Linear(output_size, self.feature_dim),
+        ])
+        # self.fc = nn.Linear(output_size, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
@@ -322,9 +329,14 @@ class PixelDecoder(nn.Module):
         num_filters *= 2**(num_layers-1)
         self.out_dim = np.prod(OUT_DIM[num_layers])
 
-        self.fc = nn.Linear(
-            feature_dim, self.out_dim
-        )
+        self.fc = nn.Sequential([
+            nn.Linear(feature_dim, self.out_dim),
+            nn.ReLU()
+            nn.Linear(self.out_dim, self.out_dim),
+        ])
+        # self.fc = nn.Linear(
+            # feature_dim, self.out_dim
+        # )
 
         self.deconvs = nn.ModuleList()
 
@@ -453,7 +465,8 @@ if __name__ == "__main__":
     print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, 
+                        eps=1e-5, weight_decay=args.weight_decay)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
 
@@ -518,9 +531,9 @@ if __name__ == "__main__":
             # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", reward[i], global_step)
-                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
-                    reward[i] = 0
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
+                    rewards_all[i] = 0
 
             for item in info:
                 if "episode" in item:
@@ -625,6 +638,7 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
+                
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
                 writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
