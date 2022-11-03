@@ -413,27 +413,27 @@ class Agent(nn.Module):
 
 def intrinsic_rw(distance):
     return distance
-    
-def visualize_encodings(ae_buffer, hash_vals, encoder, count_table, 
+
+def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
                 global_step, buffer_size, device, n_samples=500):
     """ function for visualize the embeddings with visitation freq """
     from sklearn.manifold import TSNE
     import matplotlib.pyplot as plt
     import numpy as np
     import torch
-    
+
     indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
     samples = ae_buffer[indx].view(-1, ae_buffer.shape[2:])
-    
+
     samples = samples.float().to(device)
     with torch.no_grad():
         encodings = encoder(samples).cpu().numpy()
-    
+
     hashes = hash_vals[indx].view(-1)
     cnt_map = [count_table.get(h, 0) for h in hashes]
     cnt_map = np.array(cnt_map)
     cnt_map /= np.max(cnt_map)
-    
+
     X_embedded = TSNE(n_components=2, learning_rate='auto',
                    init='random', perplexity=3).fit_transform(encodings)
     vfunc = np.vectorize(plt.cm.jet)
@@ -505,7 +505,7 @@ if __name__ == "__main__":
     print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, 
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
                         eps=1e-5, weight_decay=args.weight_decay)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
@@ -513,7 +513,7 @@ if __name__ == "__main__":
     count table and hash values
     """
     count_table = {}
-    hash_vals = np.empty((args.ae_buffer_size, args.num_envs), dtype='o')
+    hash_vals = np.empty((args.ae_buffer_size, args.num_envs), dtype='O')
     hash_size=64
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
@@ -603,14 +603,14 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     break
-            
+
             """ count state visitation frequency """
-            for env_indx, env in enumerate(envs):
+            for env_indx, env in enumerate(envs.envs):
                 hash_val = env.hash(hash_size)
                 count_table[hash_val] = count_table.get(hash_val, 0) + 1
                 # save the hash of ae buffer samples
                 hash_vals[buffer_ae_indx, env_indx] = hash_val
-                
+
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
@@ -714,7 +714,7 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                
+
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
@@ -782,7 +782,7 @@ if __name__ == "__main__":
             print(f'[Step: {global_step}/{args.total_timesteps}]')
             prev_time = time.time()
             """ visualize the encoding with count values """
-            visualize_encodings(ae_buffer, hash_vals, encoder, count_table, 
+            visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
                 global_step, current_ae_buffer_size, device, n_samples=500//args.num_envs)
     envs.close()
     writer.close()
@@ -792,7 +792,7 @@ if __name__ == "__main__":
         'encoder': encoder,
         'decoder': decoder
     }, 'weights.pt')
-    
+
     """ visualize the encoding with count values """
-    visualize_encodings(ae_buffer, hash_vals, encoder, count_table, 
+    visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
                 global_step, current_ae_buffer_size, device, n_samples=500//args.num_envs)
