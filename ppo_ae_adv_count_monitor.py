@@ -434,6 +434,7 @@ def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
     assert len(hashes) == len(samples)
     cnt_map = [count_table.get(h, 0) for h in hashes]
     cnt_map = np.array(cnt_map, dtype=np.float32)
+    cnt_map = np.log(cnt_map)
     cnt_map /= np.max(cnt_map) + 1e-3
 
     X_embedded = TSNE(n_components=2, learning_rate='auto',
@@ -486,6 +487,7 @@ def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_t
     assert len(hashes) == len(samples)
     cnt_map = [count_table.get(h, 0) for h in hashes]
     cnt_map = np.array(cnt_map, dtype=np.float32)
+    cnt_map = np.log(cnt_map)
     cnt_map /= np.max(cnt_map) + 1e-3
 
     X_embedded = TSNE(n_components=2, learning_rate='auto',
@@ -857,12 +859,12 @@ if __name__ == "__main__":
             print(f'[Step: {global_step}/{args.total_timesteps}]')
             prev_time = time.time()
             """ visualize the encoding with count values """
-        visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-            global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-            writer=writer)
-        visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-            global_step, current_ae_buffer_size, device, n_samples=1000, 
-            sample_each_traj=500, writer=writer)
+            visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
+                global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
+                writer=writer)
+            visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
+                global_step, current_ae_buffer_size, device, n_samples=1000, 
+                sample_each_traj=500, writer=writer)
 
     torch.save({
         'agent': agent.state_dict(),
@@ -873,7 +875,7 @@ if __name__ == "__main__":
     """ visualize the encoding with count values """
     visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
                 global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-                writer=writer, saveimg=True)
+                writer=writer)
     visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
                 global_step, current_ae_buffer_size, device, n_samples=500, 
                 sample_each_traj=500, writer=writer, saveimg=True)
