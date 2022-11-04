@@ -741,6 +741,6 @@ if __name__ == "__main__":
 
     torch.save({
         'agent': agent.state_dict(),
-        'encoder': encoder,
-        'decoder': decoder
+        'encoder': encoder.state_dict(),
+        'decoder': decoder.state_dict()
     }, 'weights.pt')
