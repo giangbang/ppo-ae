@@ -446,21 +446,13 @@ def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
     cb = plt.colorbar()
     cb.set_label('visitation counts')
     
-    """ Save to png files """
-    img_path = f'encodings_{global_step}.png'
-    plt.savefig(img_path)
+    if saveimg:
+        """ Save to png files """
+        img_path = f'encodings_{global_step}.png'
+        plt.savefig(img_path)
     if writer is not None:
         # write to tensorboard writer
-        import cv2
-        img = cv2.imread(img_path).transpose([2, 0, 1])
-        img = torch.from_numpy(img).unsqueeze(0)
-        writer.add_images("embeddings/random_samples", img, global_step)
-        if not saveimg:
-            import os
-            try:
-                os.remove(img_path)
-            except:
-                pass
+        writer.add_figure("embeddings/random_samples", plt.gcf(), global_step)
     
 def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
                 global_step, buffer_size, device, n_samples=2000, 
@@ -503,22 +495,14 @@ def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_t
                 c=cnt_map, edgecolors='black', zorder=1)
     cb = plt.colorbar()
     cb.set_label('visitation counts')
-    
-    """ Save to png files """
-    img_path = f'encodings_traj_{global_step}.png'
-    plt.savefig(img_path)
+        
+    if saveimg:
+        """ Save to png files """
+        img_path = f'encodings_traj_{global_step}.png'
+        plt.savefig(img_path)
     if writer is not None:
         # write to tensorboard writer
-        import cv2
-        img = cv2.imread(img_path).transpose([2, 0, 1])
-        img = torch.from_numpy(img).unsqueeze(0)
-        writer.add_images("embeddings/traj_samples", img, global_step)
-        if not saveimg:
-            import os
-            try:
-                os.remove(img_path)
-            except:
-                pass
+        writer.add_figure("embeddings/traj_samples", plt.gcf(), global_step)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -862,8 +846,8 @@ if __name__ == "__main__":
                 global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
                 writer=writer)
             visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000, 
-                sample_each_traj=200, writer=writer)
+                global_step, current_ae_buffer_size, device, n_samples=200, 
+                sample_each_traj=200, writer=writer, saveimg=True)
 
     torch.save({
         'agent': agent.state_dict(),
@@ -876,7 +860,7 @@ if __name__ == "__main__":
                 global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
                 writer=writer)
     visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000, 
+                global_step, current_ae_buffer_size, device, n_samples=200, 
                 sample_each_traj=200, writer=writer, saveimg=True)
     
     envs.close()
