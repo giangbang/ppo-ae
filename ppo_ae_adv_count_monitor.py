@@ -415,7 +415,8 @@ def intrinsic_rw(distance):
     return distance
 
 def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
-                global_step, buffer_size, device, n_samples=500):
+                global_step, buffer_size, device, n_samples=500, writer=None,
+                saveimg=False):
     """ function for visualize the embeddings with visitation freq """
     from sklearn.manifold import TSNE
     import matplotlib.pyplot as plt
@@ -443,7 +444,73 @@ def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
     plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=cnt_map, edgecolors='black')
     cb = plt.colorbar()
     cb.set_label('visitation counts')
-    plt.savefig(f'encodings_{global_step}.png')
+    
+    """ Save to png files """
+    img_path = f'encodings_{global_step}.png'
+    plt.savefig(img_path)
+    if writer is None:
+        # write to tensorboard writer
+        import cv2
+        img = cv2.imread(img_path, mode='RGB')
+        writer.add_images("embeddings/random_samples", img)
+        if not saveimg:
+            import os
+            try:
+                os.remove(img_path)
+            except:
+                pass
+    
+def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
+                global_step, buffer_size, device, n_samples=2000, 
+                sample_each_traj=200, writer=None, saveimg=False):
+    """ function for visualize the embeddings from the same trajectories with visitation freq """
+    from sklearn.manifold import TSNE
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import torch
+
+    n_samples = n_samples // sample_each_traj
+    indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
+    indx = indx.unsqueeze(1) + torch.arange(sample_each_traj).view(1, -1)
+    indx = indx.view(-1) % buffer_size
+    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
+
+    samples = samples.float().to(device)
+    with torch.no_grad():
+        encodings = encoder(samples).cpu().numpy()
+
+    hashes = hash_vals[indx].reshape(-1)
+    assert len(hashes) == len(samples)
+    cnt_map = [count_table.get(h, 0) for h in hashes]
+    cnt_map = np.array(cnt_map, dtype=np.float32)
+    cnt_map /= np.max(cnt_map) + 1e-3
+
+    X_embedded = TSNE(n_components=2, learning_rate='auto',
+                   init='random', perplexity=3).fit_transform(encodings)
+
+    plt.figure()
+    for x, y in zip(*X_embedded.reshape((n_samples, sample_each_traj, -1))):
+        plt.plot(x, y, c=0)
+    
+    plt.jet()
+    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=cnt_map, edgecolors='black')
+    cb = plt.colorbar()
+    cb.set_label('visitation counts')
+    
+    """ Save to png files """
+    img_path = f'encodings_traj_{global_step}.png'
+    plt.savefig(img_path)
+    if writer is None:
+        # write to tensorboard writer
+        import cv2
+        img = cv2.imread(img_path, mode='RGB')
+        writer.add_images("embeddings/traj_samples", img)
+        if not saveimg:
+            import os
+            try:
+                os.remove(img_path)
+            except:
+                pass
 
 if __name__ == "__main__":
     args = parse_args()
@@ -784,16 +851,25 @@ if __name__ == "__main__":
             prev_time = time.time()
             """ visualize the encoding with count values """
             visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs)
-    envs.close()
-    writer.close()
+                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs,
+                writer=writer)
+            visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
+                global_step, buffer_size, device, n_samples=3000, 
+                sample_each_traj=200, writer=writer)
 
     torch.save({
         'agent': agent.state_dict(),
-        'encoder': encoder,
-        'decoder': decoder
+        'encoder': encoder.state_dict(),
+        'decoder': decoder.state_dict(),
     }, 'weights.pt')
 
     """ visualize the encoding with count values """
     visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs)
+                global_step, current_ae_buffer_size, device, n_samples=3000//args.num_envs,
+                writer=writer)
+    visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
+                global_step, buffer_size, device, n_samples=3000, 
+                sample_each_traj=200, writer=writer)
+    
+    envs.close()
+    writer.close()
