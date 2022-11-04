@@ -434,7 +434,7 @@ def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
     assert len(hashes) == len(samples)
     cnt_map = [count_table.get(h, 0) for h in hashes]
     cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map)
+    cnt_map = np.log(cnt_map+1)
     cnt_map /= np.max(cnt_map) + 1e-3
 
     X_embedded = TSNE(n_components=2, learning_rate='auto',
@@ -474,7 +474,7 @@ def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_t
     n_samples = n_samples // sample_each_traj
 
     indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    indx = indx.unsqueeze(1) + torch.arange(sample_each_traj).view(1, -1)
+    indx = indx.view(-1, 1) + torch.arange(sample_each_traj).view(1, -1)
     indx = indx.view(-1) % buffer_size
     
     samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
@@ -487,17 +487,16 @@ def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_t
     assert len(hashes) == len(samples)
     cnt_map = [count_table.get(h, 0) for h in hashes]
     cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map)
+    cnt_map = np.log(cnt_map+1)
     cnt_map /= np.max(cnt_map) + 1e-3
 
     X_embedded = TSNE(n_components=2, learning_rate='auto',
                    init='random', perplexity=3).fit_transform(encodings)
-
     plt.clf()
     for x, y in zip(*X_embedded.reshape(
-                (n_samples, sample_each_traj, -1)
+                (-1, sample_each_traj, 2)
             ).transpose([2, 0, 1]) ):
-        plt.plot(x, y, alpha=0.5, zorder=-1)
+        plt.plot(x, y, alpha=0.6, zorder=-1)
     
     plt.jet()
     plt.scatter(X_embedded[:, 0], X_embedded[:, 1], 
@@ -864,7 +863,7 @@ if __name__ == "__main__":
                 writer=writer)
             visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
                 global_step, current_ae_buffer_size, device, n_samples=1000, 
-                sample_each_traj=500, writer=writer)
+                sample_each_traj=200, writer=writer)
 
     torch.save({
         'agent': agent.state_dict(),
@@ -877,8 +876,8 @@ if __name__ == "__main__":
                 global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
                 writer=writer)
     visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=500, 
-                sample_each_traj=500, writer=writer, saveimg=True)
+                global_step, current_ae_buffer_size, device, n_samples=1000, 
+                sample_each_traj=200, writer=writer, saveimg=True)
     
     envs.close()
     writer.close()
