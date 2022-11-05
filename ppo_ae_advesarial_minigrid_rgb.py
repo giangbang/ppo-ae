@@ -474,7 +474,7 @@ if __name__ == "__main__":
     print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, 
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
                         eps=1e-5, weight_decay=args.weight_decay)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
@@ -504,6 +504,7 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
+    intrinsic_reward_measures = []
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -553,7 +554,7 @@ if __name__ == "__main__":
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
-                writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward.mean(), global_step)
+                intrinsic_reward_measures.append(intrinsic_reward.cpu().numpy())
 
             # log success and rewards
             for i, d in enumerate(done):
@@ -669,7 +670,7 @@ if __name__ == "__main__":
                 latent = encoder(ae_batch)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                
+
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
@@ -732,6 +733,12 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+        # log intrinsic rewards
+        intrinsic_reward_measures = np.concatenate(intrinsic_reward_measures, axis=0)
+        writer.add_scalar("rewards/average_intrinsic_rewards", intrinsic_reward_measures.mean(), global_step)
+        writer.add_scalar("rewards/max_intrinsic_rewards", intrinsic_reward_measures.max(), global_step)
+        intrinsic_reward_measures = []
 
         if time.time() - prev_time > 300:
             print(f'[Step: {global_step}/{args.total_timesteps}]')
