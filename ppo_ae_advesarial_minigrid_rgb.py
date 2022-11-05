@@ -735,10 +735,11 @@ if __name__ == "__main__":
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
         # log intrinsic rewards
-        intrinsic_reward_measures = np.concatenate(intrinsic_reward_measures, axis=0)
-        writer.add_scalar("rewards/average_intrinsic_rewards", intrinsic_reward_measures.mean(), global_step)
-        writer.add_scalar("rewards/max_intrinsic_rewards", intrinsic_reward_measures.max(), global_step)
-        intrinsic_reward_measures = []
+        if global_step > args.ae_warmup_steps:
+            intrinsic_reward_measures = np.concatenate(intrinsic_reward_measures, axis=0)
+            writer.add_scalar("rewards/average_intrinsic_rewards", intrinsic_reward_measures.mean(), global_step)
+            writer.add_scalar("rewards/max_intrinsic_rewards", intrinsic_reward_measures.max(), global_step)
+            intrinsic_reward_measures = []
 
         if time.time() - prev_time > 300:
             print(f'[Step: {global_step}/{args.total_timesteps}]')
