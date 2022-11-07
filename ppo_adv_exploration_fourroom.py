@@ -1,5 +1,11 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 
+"""
+Run the algorithm with fourroom environment from minigrid, then plot
+the heatmap distribution of the state visitation frequency of the agent
+for the first several env steps (300_000)
+"""
+
 import argparse
 import os
 import random
@@ -97,6 +103,17 @@ class CustomFlatObsWrapper(gym.core.ObservationWrapper):
 
         return obs
 
+class MovementActionWrapper(gym.core.ActionWrapper):
+    """
+    Limit the action space to only take the movement actions, ignoring pickup, drop, toggle and done actions
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        self.action_space = gym.spaces.Discrete(3)
+        
+    def action(self, action):
+        return action
+
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
@@ -118,11 +135,11 @@ def parse_args():
         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Algorithm specific arguments
-    parser.add_argument("--env-id", type=str, default="CartPole-v1",
+    parser.add_argument("--env-id", type=str, default="MiniGrid-FourRooms-v0",
         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=500000,
+    parser.add_argument("--total-timesteps", type=int, default=300000,
         help="total timesteps of the experiments")
-    parser.add_argument("--learning-rate", type=float, default=2.5e-4,
+    parser.add_argument("--learning-rate", type=float, default=3e-4,
         help="the learning rate of the optimizer")
     parser.add_argument("--num-envs", type=int, default=4,
         help="the number of parallel game environments")
@@ -176,14 +193,19 @@ def parse_args():
     # advesatial learning parameters
     parser.add_argument("--adv-rw-coef", type=float, default=0.01,
         help="coefficient for intrinsic reward")
-    parser.add_argument("--ae-warmup-steps", type=int, default=1000,
+    parser.add_argument("--ae-warmup-steps", type=int, default=30_000,
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
 
+    # parameters for ploting heatmap
+    parser.add_argument("--upper-limit-count", type=int, default=5_000,
+        help="The upper limit for plotting the heatmap, higher values count than this will be capped")
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
+    # only work with 1 environment
+    args.num_envs = 1
     return args
 
 class TransposeImageWrapper(gym.ObservationWrapper):
@@ -207,10 +229,12 @@ class TransposeImageWrapper(gym.ObservationWrapper):
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper, ReseedWrapper
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
+        env = ReseedWrapper(env)
         env = TransposeImageWrapper(env)
+        env = MovementActionWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
@@ -413,97 +437,50 @@ class Agent(nn.Module):
 
 def intrinsic_rw(distance):
     return distance
-
-def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
-                global_step, buffer_size, device, n_samples=500, writer=None,
-                saveimg=False):
-    """ function for visualize the embeddings with visitation freq """
-    from sklearn.manifold import TSNE
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import torch
-
-    indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
-
-    samples = samples.float().to(device)
-    with torch.no_grad():
-        encodings = encoder(samples).cpu().numpy()
-
-    hashes = hash_vals[indx].reshape(-1)
-    assert len(hashes) == len(samples)
-    cnt_map = [count_table.get(h, 0) for h in hashes]
-    cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map+1)
-    cnt_map /= np.max(cnt_map) + 1e-3
-
-    X_embedded = TSNE(n_components=2, learning_rate='auto',
-                   init='random', perplexity=3).fit_transform(encodings)
-
-    plt.clf()
-    plt.jet()
-    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=cnt_map, edgecolors='black')
-    cb = plt.colorbar()
-    cb.set_label('visitation counts')
     
-    if saveimg:
-        """ Save to png files """
-        img_path = f'encodings_{global_step}.png'
-        plt.savefig(img_path)
-    if writer is not None:
-        # write to tensorboard writer
-        writer.add_figure("embeddings/random_samples", plt.gcf(), global_step)
-    
-def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
-                global_step, buffer_size, device, n_samples=2000, 
-                sample_each_traj=200, writer=None, saveimg=False):
-    """ function for visualize the embeddings from the same trajectories with visitation freq """
-    from sklearn.manifold import TSNE
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import torch
-
-    n_samples = n_samples // sample_each_traj
-
-    indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    indx = indx.view(-1, 1) + torch.arange(sample_each_traj).view(1, -1)
-    indx = indx.view(-1) % buffer_size
-    
-    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
-
-    samples = samples.float().to(device)
-    with torch.no_grad():
-        encodings = encoder(samples).cpu().numpy()
-
-    hashes = hash_vals[indx].reshape(-1)
-    assert len(hashes) == len(samples)
-    cnt_map = [count_table.get(h, 0) for h in hashes]
-    cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map+1)
-    cnt_map /= np.max(cnt_map) + 1e-3
-
-    X_embedded = TSNE(n_components=2, learning_rate='auto',
-                   init='random', perplexity=3).fit_transform(encodings)
-    plt.clf()
-    for x, y in zip(*X_embedded.reshape(
-                (-1, sample_each_traj, 2)
-            ).transpose([2, 0, 1]) ):
-        plt.plot(x, y, alpha=0.6, zorder=-1)
-    
-    plt.jet()
-    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], 
-                c=cnt_map, edgecolors='black', zorder=1)
-    cb = plt.colorbar()
-    cb.set_label('visitation counts')
+class stateRecording:
+    """recording state distributions"""
+    def __init__(self, env):
+        self.shape = env.grid.height, env.grid.width
+        self.count = np.zeros(self.shape, dtype=np.int32)
+        self.extract_mask(env)
         
-    if saveimg:
-        """ Save to png files """
-        img_path = f'encodings_traj_{global_step}.png'
-        plt.savefig(img_path)
-    if writer is not None:
-        # write to tensorboard writer
-        writer.add_figure("embeddings/traj_samples", plt.gcf(), global_step)
-
+    def add_count(self, w, h):
+        self.count[h, w] += 1
+        
+    def add_count_from_env(self, env):
+        self.add_count(*env.agent_pos)
+        
+    def get_figure(self, cap_threshold_cnt=5000):
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        cnt = np.clip(self.count, 0, cap_threshold_cnt)
+        plt.clf()
+        plt.jet()
+        plt.imshow(self.count, cmap="jet", vmin=0, vmax=cap_threshold_cnt)
+        cbar=plt.colorbar()
+        lin_spc = np.linspace(0, cap_threshold_cnt, 6).astype(np.int32)
+        # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
+        cbar.update_ticks()
+        lin_spc = [str(i) for i in lin_spc]
+        lin_spc[-1] = ">"+lin_spc[-1]
+        cbar.ax.set_yticklabels(lin_spc)
+        cbar.set_label('Visitation counts')
+        
+        # over lay walls
+        plt.imshow(np.zeros_like(self.count, dtype=np.uint8), 
+                cmap="gray", alpha=self.mask.astype(np.float),
+                vmin=0, vmax=1)
+        return plt.gcf()
+        
+    def extract_mask(self, env):
+        self.mask = np.zeros_like(self.count)
+        for j in range(env.grid.height):
+            for i in range(env.grid.width):
+                c = env.grid.get(i, j)
+                if c is not None and c.type=="wall":
+                    self.mask[j, i]=1
+                    
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -552,6 +529,8 @@ if __name__ == "__main__":
         envs
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    
+    record_state = stateRecording(envs.envs[0])
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -568,13 +547,6 @@ if __name__ == "__main__":
                         eps=1e-5, weight_decay=args.weight_decay)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
-    """
-    count table and hash values
-    """
-    count_table = {}
-    # using numpy array since torch tensor does not support object type
-    hash_vals = np.empty((args.ae_buffer_size, args.num_envs), dtype='O')
-    hash_size=64
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
                 dtype=torch.uint8)
@@ -601,6 +573,9 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
+    intrinsic_reward_measures = []
+    
+    record_state.add_count_from_env(envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -615,6 +590,8 @@ if __name__ == "__main__":
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
             # done_buffer[buffer_ae_indx] = next_done.cpu()
+            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
+            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
             dones[step] = next_done
 
@@ -629,6 +606,10 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            record_state.add_count_from_env(envs.envs[0])
+            
+            # hide reward from agents
+            reward = np.array(reward)*0
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
@@ -648,7 +629,7 @@ if __name__ == "__main__":
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
-                writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward.mean(), global_step)
+                intrinsic_reward_measures.append(intrinsic_reward.cpu().numpy())
 
             # log success and rewards
             for i, d in enumerate(done):
@@ -663,16 +644,6 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     break
-
-            """ count state visitation frequency """
-            for env_indx, env in enumerate(envs.envs):
-                hash_val = env.hash(hash_size)
-                count_table[hash_val] = count_table.get(hash_val, 0) + 1
-                # save the hash of ae buffer samples
-                hash_vals[buffer_ae_indx, env_indx] = hash_val
-
-            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
-            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -821,7 +792,10 @@ if __name__ == "__main__":
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
-
+            
+            # log heatmap distribution
+            writer.add_figure("state_distribution/heatmap", record_state.get_figure(), global_step)
+            
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -838,30 +812,21 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+        # log intrinsic rewards
+        if global_step > args.ae_warmup_steps:
+            intrinsic_reward_measures = np.concatenate(intrinsic_reward_measures, axis=0)
+            writer.add_scalar("rewards/average_intrinsic_rewards", intrinsic_reward_measures.mean(), global_step)
+            writer.add_scalar("rewards/max_intrinsic_rewards", intrinsic_reward_measures.max(), global_step)
+            intrinsic_reward_measures = []
+
         if time.time() - prev_time > 300:
             print(f'[Step: {global_step}/{args.total_timesteps}]')
             prev_time = time.time()
-            """ visualize the encoding with count values """
-            visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-                writer=writer)
-            visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=200, 
-                sample_each_traj=200, writer=writer)
+    envs.close()
+    writer.close()
 
     torch.save({
         'agent': agent.state_dict(),
         'encoder': encoder.state_dict(),
-        'decoder': decoder.state_dict(),
+        'decoder': decoder.state_dict()
     }, 'weights.pt')
-
-    """ visualize the encoding with count values """
-    visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-                writer=writer)
-    visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=200, 
-                sample_each_traj=200, writer=writer, saveimg=True)
-    
-    envs.close()
-    writer.close()
