@@ -201,11 +201,11 @@ def parse_args():
         help="The upper limit for plotting the heatmap, higher values count than this will be capped")
 
     args = parser.parse_args()
+    # only work with 1 environment
+    args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
-    # only work with 1 environment
-    args.num_envs = 1
     return args
 
 class TransposeImageWrapper(gym.ObservationWrapper):
@@ -234,7 +234,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = ImgObsWrapper(env)
         env = ReseedWrapper(env)
         env = TransposeImageWrapper(env)
-        env = MovementActionWrapper(env)
+        # env = MovementActionWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
@@ -607,7 +607,7 @@ if __name__ == "__main__":
             record_state.add_count_from_env(envs.envs[0])
             
             # hide reward from agents
-            reward = np.zeros_like(reward)
+            # reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
@@ -677,7 +677,7 @@ if __name__ == "__main__":
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
-
+ 
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
                     encoder(b_obs[mb_inds]), b_actions.long()[mb_inds],
                     # detach value and policy go here
