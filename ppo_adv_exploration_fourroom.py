@@ -110,7 +110,7 @@ class MovementActionWrapper(gym.core.ActionWrapper):
     def __init__(self, env):
         super().__init__(env)
         self.action_space = gym.spaces.Discrete(3)
-        
+
     def action(self, action):
         return action
 
@@ -197,7 +197,7 @@ def parse_args():
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
 
     # parameters for ploting heatmap
-    parser.add_argument("--upper-limit-count", type=int, default=5_000,
+    parser.add_argument("--upper-limit-count", type=int, default=500,
         help="The upper limit for plotting the heatmap, higher values count than this will be capped")
 
     args = parser.parse_args()
@@ -437,20 +437,20 @@ class Agent(nn.Module):
 
 def intrinsic_rw(distance):
     return distance
-    
+
 class stateRecording:
     """recording state distributions"""
     def __init__(self, env):
         self.shape = env.grid.height, env.grid.width
         self.count = np.zeros(self.shape, dtype=np.int32)
         self.extract_mask(env)
-        
+
     def add_count(self, w, h):
         self.count[h, w] += 1
-        
+
     def add_count_from_env(self, env):
         self.add_count(*env.agent_pos)
-        
+
     def get_figure(self, cap_threshold_cnt=5000):
         import matplotlib.pyplot as plt
         import matplotlib.ticker as ticker
@@ -466,13 +466,13 @@ class stateRecording:
         lin_spc[-1] = ">"+lin_spc[-1]
         cbar.ax.set_yticklabels(lin_spc)
         cbar.set_label('Visitation counts')
-        
+
         # over lay walls
-        plt.imshow(np.zeros_like(self.count, dtype=np.uint8), 
+        plt.imshow(np.zeros_like(self.count, dtype=np.uint8),
                 cmap="gray", alpha=self.mask.astype(np.float),
                 vmin=0, vmax=1)
         return plt.gcf()
-        
+
     def extract_mask(self, env):
         self.mask = np.zeros_like(self.count)
         for j in range(env.grid.height):
@@ -480,7 +480,7 @@ class stateRecording:
                 c = env.grid.get(i, j)
                 if c is not None and c.type=="wall":
                     self.mask[j, i]=1
-                    
+
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -605,7 +605,7 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
             record_state.add_count_from_env(envs.envs[0])
-            
+
             # hide reward from agents
             reward = np.zeros_like(reward)
 
@@ -677,7 +677,7 @@ if __name__ == "__main__":
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
- 
+
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
                     encoder(b_obs[mb_inds]), b_actions.long()[mb_inds],
                     # detach value and policy go here
@@ -790,11 +790,11 @@ if __name__ == "__main__":
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
-            
+
             # log heatmap distribution
-            writer.add_figure("state_distribution/heatmap", 
+            writer.add_figure("state_distribution/heatmap",
                     record_state.get_figure(args.upper_limit_count), global_step)
-            
+
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -829,3 +829,7 @@ if __name__ == "__main__":
         'encoder': encoder.state_dict(),
         'decoder': decoder.state_dict()
     }, 'weights.pt')
+
+    with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
+        np.save(f, record_state.count)
+        np.save(f, record_state.mask)
