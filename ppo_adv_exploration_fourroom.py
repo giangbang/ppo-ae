@@ -234,7 +234,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = ImgObsWrapper(env)
         env = ReseedWrapper(env)
         env = TransposeImageWrapper(env)
-        # env = MovementActionWrapper(env)
+        env = MovementActionWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
@@ -607,7 +607,7 @@ if __name__ == "__main__":
             record_state.add_count_from_env(envs.envs[0])
             
             # hide reward from agents
-            # reward = np.zeros_like(reward)
+            reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
