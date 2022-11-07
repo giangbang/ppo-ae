@@ -529,8 +529,6 @@ if __name__ == "__main__":
         envs
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
-    
-    record_state = stateRecording(envs.envs[0])
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -574,8 +572,8 @@ if __name__ == "__main__":
     prev_time=time.time()
     prev_global_timestep = 0
     intrinsic_reward_measures = []
-    
-    record_state.add_count_from_env(envs[0])
+    record_state = stateRecording(envs.envs[0])
+    record_state.add_count_from_env(envs.envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -609,7 +607,7 @@ if __name__ == "__main__":
             record_state.add_count_from_env(envs.envs[0])
             
             # hide reward from agents
-            reward = np.array(reward)*0
+            reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
@@ -794,7 +792,8 @@ if __name__ == "__main__":
             prev_global_timestep = global_step
             
             # log heatmap distribution
-            writer.add_figure("state_distribution/heatmap", record_state.get_figure(), global_step)
+            writer.add_figure("state_distribution/heatmap", 
+                    record_state.get_figure(args.upper_limit_count), global_step)
             
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
