@@ -616,6 +616,9 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
             record_state.add_count_from_env(envs.envs[0])
+            
+            """ hide reward from agents """
+            reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
