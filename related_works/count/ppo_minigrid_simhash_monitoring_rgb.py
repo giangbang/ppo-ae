@@ -267,7 +267,7 @@ class PixelEncoder(nn.Module):
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to []
 
@@ -308,11 +308,11 @@ class PixelEncoder(nn.Module):
 
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
-        
+
         self.outputs['latent'] = h_fc
 
         return h_fc
-        
+
 class PixelDecoder(nn.Module):
     def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
@@ -389,7 +389,7 @@ class Agent(nn.Module):
             action = probs.sample()
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-    
+
 class stateRecording:
     """recording state distributions"""
     def __init__(self, env):
@@ -529,9 +529,9 @@ if __name__ == "__main__":
     prev_global_timestep = 0
     record_state = stateRecording(envs.envs[0])
     record_state.add_count_from_env(envs.envs[0])
-    
+
     hash_bonus = HashingBonusEvaluator(dim_key=args.hash_bit, obs_processed_flat_dim=ae_dim)
-    
+
     # actual training with PPO
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
@@ -562,7 +562,7 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
             record_state.add_count_from_env(envs.envs[0])
-            
+
             """ hide reward from agents """
             reward = np.zeros_like(reward)
 
@@ -691,7 +691,7 @@ if __name__ == "__main__":
                 ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                            size=(args.ae_batch_size,))
                 ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-                
+
                 # flatten
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 # update AE
@@ -737,7 +737,7 @@ if __name__ == "__main__":
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
-            
+
             # log heatmap distribution
             writer.add_figure("state_distribution/heatmap",
                     record_state.get_figure(args.upper_limit_count), global_step)
@@ -770,7 +770,7 @@ if __name__ == "__main__":
         'encoder': encoder,
         'decoder': decoder
     }, 'weights.pt')
-    
+
     with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
         np.save(f, record_state.count)
         np.save(f, record_state.mask)

@@ -245,7 +245,7 @@ class PixelEncoder(nn.Module):
         self.feature_dim = feature_dim
         self.num_layers = num_layers
         n_input_channels = obs_shape[0]
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to []
 
@@ -258,12 +258,14 @@ class PixelEncoder(nn.Module):
             nn.ReLU(),
             nn.Flatten(),
         )
-         # Compute shape by doing one forward pass
+        # Compute shape by doing one forward pass
         with torch.no_grad():
-            n_flatten = self.convs(torch.randn(obs_shape).float()).view(-1).shape[0]
+            n_flatten = self.convs(
+                torch.randn((obs_shape[0], 84, 84)).float()
+            ).view(-1).shape[0]
 
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), )
-        
+        self.linear = nn.Sequential(nn.Linear(n_flatten, feature_dim), )
+
         self.outputs = dict()
 
     def forward_conv(self, obs):
@@ -290,7 +292,7 @@ class PixelEncoder(nn.Module):
         self.outputs['latent'] = h_fc
 
         return h_fc
-        
+
 # ===================================
 
 class Agent(nn.Module):
