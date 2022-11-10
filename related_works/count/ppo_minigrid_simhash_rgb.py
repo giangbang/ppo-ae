@@ -21,7 +21,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from sim_hash import HashingBonusEvaluator
+from simhash import HashingBonusEvaluator
 
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
