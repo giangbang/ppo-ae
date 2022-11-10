@@ -21,7 +21,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from .sim_hash import HashingBonusEvaluator
+from sim_hash import HashingBonusEvaluator
 
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
@@ -298,9 +298,6 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
-
-        # h_norm = self.ln(h_fc)
-        # self.outputs['ln'] = h_norm
         
         self.outputs['latent'] = h_fc
 
@@ -480,7 +477,6 @@ if __name__ == "__main__":
     prev_global_timestep = 0
     
     hash_bonus = HashingBonusEvaluator(dim_key=ae_dim, obs_processed_flat_dim=args.hash_bit)
-    
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -526,6 +522,7 @@ if __name__ == "__main__":
                     hash_bonus.inc_hash(next_embedding_np)
                 
                 intrinsic_reward = hash_bonus.predict(next_embedding_np)
+                intrinsic_reward = torch.tensor(intrinsic_reward).to(device)
                 rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
                 
                 # log histogram of count table
@@ -641,6 +638,7 @@ if __name__ == "__main__":
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 # update AE
                 latent = encoder(ae_batch)
+                latent = torch.tanh(latent)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])

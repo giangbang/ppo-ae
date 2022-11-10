@@ -21,7 +21,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from .simhash import HashingBonusEvaluator
+from simhash import HashingBonusEvaluator
 
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
@@ -468,8 +468,6 @@ if __name__ == "__main__":
     ae_dim=args.ae_dim
 
     ae_batch_size = args.ae_batch_size
-    # control the l2 regularization of the latent vectors
-    beta=args.beta
 
     # pretty print the hyperparameters
     # comment this line if you don't want this effect
@@ -582,6 +580,7 @@ if __name__ == "__main__":
                     hash_bonus.inc_hash(next_embedding_np)
 
                 intrinsic_reward = hash_bonus.predict(next_embedding_np)
+                intrinsic_reward = torch.tensor(intrinsic_reward).to(device)
                 rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
 
                 # log histogram of count table
@@ -697,6 +696,7 @@ if __name__ == "__main__":
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 # update AE
                 latent = encoder(ae_batch)
+                latent = torch.tanh(latent)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
