@@ -613,10 +613,10 @@ if __name__ == "__main__":
                     next_embedding = encoder(next_obs)
                     next_embedding_np = next_embedding.T.cpu().numpy()
                     hash_bonus.inc_hash(next_embedding_np)
-                
+
                 intrinsic_reward = hash_bonus.predict(next_embedding_np)
-                rewards[step] += args.ucb_coef * intrinsic_reward.view(-1)
-                
+                rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
+
                 # log histogram of count table
                 if (global_step//args.num_envs)%(args.save_count_histogram_every//args.num_envs)==0:
                     writer.add_histogram("counts/count_histogram", hash_table, global_step)
@@ -803,3 +803,7 @@ if __name__ == "__main__":
         'encoder': encoder,
         'decoder': decoder
     }, 'weights.pt')
+    
+    with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
+        np.save(f, record_state.count)
+        np.save(f, record_state.mask)
