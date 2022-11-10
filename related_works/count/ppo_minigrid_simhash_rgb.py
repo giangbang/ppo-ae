@@ -474,9 +474,9 @@ if __name__ == "__main__":
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
-    prev_global_timestep = 0
+    prev_global_timestep = 0 
     
-    hash_bonus = HashingBonusEvaluator(dim_key=ae_dim, obs_processed_flat_dim=args.hash_bit)
+    hash_bonus = HashingBonusEvaluator(dim_key=args.hash_bit, obs_processed_flat_dim=ae_dim)
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -518,7 +518,7 @@ if __name__ == "__main__":
                 # Compute counts
                 with torch.no_grad():
                     next_embedding = encoder(next_obs)
-                    next_embedding_np = next_embedding.T.cpu().numpy()
+                    next_embedding_np = next_embedding.cpu().numpy()
                     hash_bonus.inc_hash(next_embedding_np)
                 
                 intrinsic_reward = hash_bonus.predict(next_embedding_np)
