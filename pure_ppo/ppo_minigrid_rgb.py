@@ -21,8 +21,6 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from .simhash import HashingBonusEvaluator
-
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
     hyper_param_space, value_space = 30, 40
@@ -164,10 +162,6 @@ def parse_args():
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
-    parser.add_argument("--alpha", type=float, default=.1,
-        help="coefficient for L2 norm of adjacent states")
-    parser.add_argument("--lamda", type=float, default=.1,
-        help="coefficient for learned hash function")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
         help="buffer size for training ae, recommend less than 200k ")
     parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
@@ -175,24 +169,8 @@ def parse_args():
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
 
-    # count-based parameters
-    parser.add_argument("--hash-bit", type=int, default=-1,
-        help="Number of bits used in Simhash, default is -1, automatically set according to `total-timesteps`")
-    parser.add_argument("--ucb-coef", type=float, default=0.01,
-        help="coefficient for ucb intrinsic reward")
-    parser.add_argument("--ae-warmup-steps", type=int, default=1000,
-        help="Warmup phase for VAE, states visited in these first warmup steps are not counted for UCB")
-    parser.add_argument("--save-count-histogram-every", type=int, default=5_000,
-        help="Interval to save the histogram of the count table")
-
-    # parameters for ploting heatmap
-    parser.add_argument("--upper-limit-count", type=int, default=500,
-        help="The upper limit for plotting the heatmap, higher values count than this will be capped")
-
 
     args = parser.parse_args()
-    # only work with 1 environment
-    args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
@@ -219,10 +197,9 @@ class TransposeImageWrapper(gym.ObservationWrapper):
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper, ReseedWrapper
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
-        env = ReseedWrapper(env)
         env = TransposeImageWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
@@ -305,6 +282,7 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
+        self.outputs['fc'] = h_fc
 
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
@@ -312,49 +290,6 @@ class PixelEncoder(nn.Module):
         self.outputs['latent'] = h_fc
 
         return h_fc
-        
-class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
-        super().__init__()
-
-        self.num_layers = num_layers
-        self.num_filters = num_filters
-        self.out_dim = OUT_DIM[num_layers]
-
-        self.fc = nn.Linear(
-            feature_dim, num_filters * self.out_dim * self.out_dim
-        )
-
-        self.deconvs = nn.ModuleList()
-
-        for i in range(self.num_layers - 1):
-            self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
-            )
-        self.deconvs.append(
-            nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2, output_padding=1
-            )
-        )
-
-        self.outputs = dict()
-
-    def forward(self, h):
-        h = torch.relu(self.fc(h))
-        self.outputs['fc'] = h
-
-        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
-        self.outputs['deconv1'] = deconv
-
-        for i in range(0, self.num_layers - 1):
-            deconv = torch.relu(self.deconvs[i](deconv))
-            self.outputs['deconv%s' % (i + 1)] = deconv
-
-        obs = self.deconvs[-1](deconv)
-        obs = torch.tanh(obs)
-        self.outputs['obs'] = obs
-
-        return obs
 
 # ===================================
 
@@ -389,49 +324,6 @@ class Agent(nn.Module):
             action = probs.sample()
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-    
-class stateRecording:
-    """recording state distributions"""
-    def __init__(self, env):
-        self.shape = env.grid.height, env.grid.width
-        self.count = np.zeros(self.shape, dtype=np.int32)
-        self.extract_mask(env)
-
-    def add_count(self, w, h):
-        self.count[h, w] += 1
-
-    def add_count_from_env(self, env):
-        self.add_count(*env.agent_pos)
-
-    def get_figure(self, cap_threshold_cnt=5000):
-        import matplotlib.pyplot as plt
-        import matplotlib.ticker as ticker
-        cnt = np.clip(self.count, 0, cap_threshold_cnt)
-        plt.clf()
-        plt.jet()
-        plt.imshow(self.count, cmap="jet", vmin=0, vmax=cap_threshold_cnt)
-        cbar=plt.colorbar()
-        lin_spc = np.linspace(0, cap_threshold_cnt, 6).astype(np.int32)
-        # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
-        cbar.update_ticks()
-        lin_spc = [str(i) for i in lin_spc]
-        lin_spc[-1] = ">"+lin_spc[-1]
-        cbar.ax.set_yticklabels(lin_spc)
-        cbar.set_label('Visitation counts')
-
-        # over lay walls
-        plt.imshow(np.zeros_like(self.count, dtype=np.uint8),
-                cmap="gray", alpha=self.mask.astype(np.float),
-                vmin=0, vmax=1)
-        return plt.gcf()
-
-    def extract_mask(self, env):
-        self.mask = np.zeros_like(self.count)
-        for j in range(env.grid.height):
-            for i in range(env.grid.width):
-                c = env.grid.get(i, j)
-                if c is not None and c.type=="wall":
-                    self.mask[j, i]=1
 
 
 if __name__ == "__main__":
@@ -486,29 +378,10 @@ if __name__ == "__main__":
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
-    encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
-        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
-    )
+    encoder = PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device)
     print(encoder)
-    print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
-
-    args.ae_buffer_size = args.ae_buffer_size//args.num_envs
-
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
-                dtype=torch.uint8)
-    # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
-    buffer_ae_indx = 0
-    ae_buffer_is_full = False
-
-    # HASH table
-    if args.hash_bit < 0:
-        args.hash_bit = int(np.log2(args.total_timesteps / 100))
-        print(f"Automatically set number of hash bit to {args.hash_bit}")
-    hash_table = torch.zeros((2**args.hash_bit,), dtype=torch.int32)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -529,11 +402,7 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
-    record_state = stateRecording(envs.envs[0])
-    record_state.add_count_from_env(envs.envs[0])
-    
-    hash_bonus = HashingBonusEvaluator(dim_key=ae_dim, obs_processed_flat_dim=args.hash_bit)
-    
+
     # actual training with PPO
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
@@ -545,11 +414,6 @@ if __name__ == "__main__":
         for step in range(0, args.num_steps):
             global_step += 1 * args.num_envs
             obs[step] = next_obs
-            buffer_ae[buffer_ae_indx] = next_obs.cpu()
-            # done_buffer[buffer_ae_indx] = next_done.cpu()
-            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
-            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
-
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
@@ -563,37 +427,17 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
-            record_state.add_count_from_env(envs.envs[0])
-            
-            """ hide reward from agents """
-            reward = np.zeros_like(reward)
-
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
-            # UCB rewards
-            if global_step > args.ae_warmup_steps:
-                # Compute counts
-                with torch.no_grad():
-                    next_embedding = encoder(next_obs)
-                    next_embedding_np = next_embedding.T.cpu().numpy()
-                    hash_bonus.inc_hash(next_embedding_np)
-
-                intrinsic_reward = hash_bonus.predict(next_embedding_np)
-                rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
-
-                # log histogram of count table
-                if (global_step//args.num_envs)%(args.save_count_histogram_every//args.num_envs)==0:
-                    writer.add_histogram("counts/count_histogram", hash_table, global_step)
-
             # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", reward[i], global_step)
-                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
-                    reward[i] = 0
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] >= 0.05, global_step)
+                    rewards_all[i] = 0
 
             for item in info:
                 if "episode" in item:
@@ -687,61 +531,10 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                # training auto encoder
-                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                           size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-                
-                # flatten
-                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                # update AE
-                latent = encoder(ae_batch)
-                reconstruct = decoder(latent)
-                assert encoder.outputs['obs'].shape == reconstruct.shape
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-                loss = reconstruct_loss - args.lamda*torch.min(latent.square(), (1-latent).square()).mean()
-                writer.add_scalar("ae/loss", loss.item(), global_step)
-
-                encoder_optim.zero_grad()
-                decoder_optim.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                encoder_optim.step()
-                decoder_optim.step()
-
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-
-        # for some every step, save the current data for training of AE
-        if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
-            os.makedirs("ae_data", exist_ok=True)
-            file_path = os.path.join("ae_data", f"step_{global_step}.pt")
-            torch.save(buffer_ae[:current_ae_buffer_size], file_path)
-
-        # for some every step, save the image reconstructions of AE, for debugging purpose
-        if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
-            # AE reconstruction
-            save_reconstruction = reconstruct[0].detach()
-            save_reconstruction = (save_reconstruction*128 + 128).clip(0, 255).cpu()
-
-            # AE target
-            ae_target = encoder.outputs['obs'][0].detach()
-            ae_target = (ae_target*128 + 128).clip(0, 255).cpu()
-
-            # log
-            writer.add_image('image/AE reconstruction', save_reconstruction.type(torch.uint8), global_step)
-            writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
-            writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
-            prev_global_timestep = global_step
-            
-            # log heatmap distribution
-            writer.add_figure("state_distribution/heatmap",
-                    record_state.get_figure(args.upper_limit_count), global_step)
-
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
@@ -764,13 +557,7 @@ if __name__ == "__main__":
             prev_time = time.time()
     envs.close()
     writer.close()
-
     torch.save({
         'agent': agent.state_dict(),
         'encoder': encoder,
-        'decoder': decoder
     }, 'weights.pt')
-    
-    with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
-        np.save(f, record_state.count)
-        np.save(f, record_state.mask)

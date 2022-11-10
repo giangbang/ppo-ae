@@ -1,5 +1,9 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 
+"""
+Train with regular PPO, using flatten observation of minigrid (not rgb images)
+"""
+
 import argparse
 import os
 import random
@@ -21,81 +25,6 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-def pprint(dict_data):
-    '''Pretty print Hyper-parameters'''
-    hyper_param_space, value_space = 30, 40
-    format_str = "| {:<"+ f"{hyper_param_space}" + "} | {:<"+f"{value_space}"+"}|"
-    hbar = '-'*(hyper_param_space + value_space+6)
-
-    print(hbar)
-    print(format_str.format('Hyperparams', 'Values'))
-    print(hbar)
-
-    for k, v in dict_data.items():
-        print(format_str.format(str(k), str(v)))
-
-    print(hbar)
-
-class CustomFlatObsWrapper(gym.core.ObservationWrapper):
-    '''
-    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
-    Which only considers the case where the observation contains both `image` and `mission`
-    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
-    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
-    '''
-    def __init__(self, env, maxStrLen=96):
-        super().__init__(env)
-
-        self.maxStrLen = maxStrLen
-        self.numCharCodes = 27
-
-        if isinstance(env.observation_space, spaces.Dict):
-            imgSpace = env.observation_space.spaces['image']
-        else:
-            imgSpace = env.observation_space
-        imgSize = reduce(operator.mul, imgSpace.shape, 1)
-
-        self.observation_space = spaces.Box(
-            low=0,
-            high=255,
-            shape=(imgSize + self.numCharCodes * self.maxStrLen,),
-            dtype='uint8'
-        )
-
-        self.cachedStr = None
-        self.cachedArray = None
-
-    def observation(self, obs):
-        if isinstance(obs, dict):
-            return self._observation(obs)
-        return obs.flatten()
-
-
-    def _observation(self, obs):
-        image = obs['image']
-        mission = obs['mission']
-
-        # Cache the last-encoded mission string
-        if mission != self.cachedStr:
-            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
-            mission = mission.lower()
-
-            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
-
-            for idx, ch in enumerate(mission):
-                if ch >= 'a' and ch <= 'z':
-                    chNo = ord(ch) - ord('a')
-                elif ch == ' ':
-                    chNo = ord('z') - ord('a') + 1
-                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
-                strArray[idx, chNo] = 1
-
-            self.cachedStr = mission
-            self.cachedArray = strArray
-
-        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
-
-        return obs
 
 def parse_args():
     # fmt: off
@@ -152,25 +81,8 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--save-model-every", type=int, default=200_000,
+    parser.add_argument("--save-model-freq", type=int, default=200_000,
         help="Save model every env steps")
-
-    # auto encoder parameters
-    parser.add_argument("--ae-dim", type=int, default=50,
-        help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
-        help="AE batch size")
-    parser.add_argument("--ae-training-step", type=int, default=10000,
-        help="number of training steps in ae")
-    parser.add_argument("--ae-env-step", type=int, default=10000,
-        help="number of random exploration steps to collect data to train ae")
-    parser.add_argument("--beta", type=float, default=0.0001,
-        help="L2 norm of the latent vectors")
-    parser.add_argument("--ae-buffer-size", type=int, default=100_000,
-        help="buffer size for training ae")
-    parser.add_argument("--save-ae-training-data-freq", type=int, default=200_000,
-        help="Save training AE data buffer every env steps")
-
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -178,35 +90,80 @@ def parse_args():
     # fmt: on
     return args
 
-class TransposeImageWrapper(gym.ObservationWrapper):
-    '''Transpose img dimension before being fed to neural net'''
-    def __init__(self, env, op=[2,0,1]):
+class CustomFlatObsWrapper(gym.core.ObservationWrapper):
+    '''
+    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
+    Which only considers the case where the observation contains both `image` and `mission`
+    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
+    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
+    '''
+    def __init__(self, env, maxStrLen=96):
         super().__init__(env)
-        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
-        self.op = op
-        obs_shape = self.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            self.observation_space.low[0, 0, 0],
-            self.observation_space.high[0, 0, 0], [
-                obs_shape[self.op[0]], obs_shape[self.op[1]],
-                obs_shape[self.op[2]]
-            ],
-            dtype=self.observation_space.dtype)
 
-    def observation(self, ob):
-        return ob.transpose(self.op[0], self.op[1], self.op[2])
+        self.maxStrLen = maxStrLen
+        self.numCharCodes = 27
+
+        if isinstance(env.observation_space, spaces.Dict):
+            imgSpace = env.observation_space.spaces['image']
+        else:
+            imgSpace = env.observation_space
+        imgSize = reduce(operator.mul, imgSpace.shape, 1)
+
+        obs_shape = np.array(self.reset()[0]).shape
+
+        self.observation_space = spaces.Box(
+            low=0,
+            high=10,
+            shape=(np.prod(obs_shape),),
+            dtype='uint8'
+        )
+
+        self.cachedStr = None
+        self.cachedArray = None
+
+    def observation(self, obs):
+        if isinstance(obs, dict):
+            return self._observation(obs)
+        return obs.flatten()
+
+    def _observation(self, obs):
+        image = obs['image']
+        mission = obs['mission']
+
+        # Cache the last-encoded mission string
+        if mission != self.cachedStr:
+            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
+            mission = mission.lower()
+
+            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
+
+            for idx, ch in enumerate(mission):
+                if ch >= 'a' and ch <= 'z':
+                    chNo = ord(ch) - ord('a')
+                elif ch == ' ':
+                    chNo = ord('z') - ord('a') + 1
+                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
+                strArray[idx, chNo] = 1
+
+            self.cachedStr = mission
+            self.cachedArray = strArray
+
+        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
+
+        return obs
+
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
         env = ImgObsWrapper(env)
-        env = TransposeImageWrapper(env)
+        env = CustomFlatObsWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
         env.observation_space = gym.spaces.Box(
             low=np.zeros(shape=env.observation_space.shape,dtype=int),
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
+            high=np.ones(shape=env.observation_space.shape,dtype=int)*10
         )
         print("obs shape", np.array(env.reset()[0]).shape)
 
@@ -230,156 +187,18 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-# Copy from SAC AE
-# https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
-# ===================================
-
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
-
-OUT_DIM = {2: 39, 4: 35, 6: 31}
-
-class PixelEncoder(nn.Module):
-    """Convolutional encoder of pixels observations."""
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=128):
-        super().__init__()
-
-        assert len(obs_shape) == 3
-
-        self.feature_dim = feature_dim
-        self.num_layers = num_layers
-        self.flatten = nn.Flatten()
-
-        self.convs = nn.ModuleList(
-            [nn.Linear(np.prod(obs_shape), num_filters)]
-        )
-        for i in range(num_layers - 1):
-            self.convs.append(nn.Linear(num_filters, num_filters//2))
-            num_filters//=2
-
-        self.fc = nn.Linear(num_filters, self.feature_dim)
-        self.ln = nn.LayerNorm(self.feature_dim)
-
-        self.outputs = dict()
-
-    def forward_conv(self, obs):
-        obs = obs / 10.
-        self.outputs['obs'] = obs
-        obs = self.flatten(obs)
-
-        conv = torch.relu(self.convs[0](obs))
-        self.outputs['conv1'] = conv
-
-        for i in range(1, self.num_layers):
-            conv = torch.relu(self.convs[i](conv))
-            self.outputs['conv%s' % (i + 1)] = conv
-
-        h = conv.view(conv.size(0), -1)
-        return h
-
-    def forward(self, obs, detach=False):
-        h = self.forward_conv(obs)
-
-        if detach:
-            h = h.detach()
-
-        h_fc = self.fc(h)
-        self.outputs['fc'] = h_fc
-
-        h_norm = self.ln(h_fc)
-        self.outputs['ln'] = h_norm
-
-        # out = torch.ReLU(h_norm)
-        out = h_norm
-        self.outputs['latent'] = out
-
-        return out
-
-    def copy_conv_weights_from(self, source):
-        """Tie convolutional layers"""
-        # only tie conv layers
-        for i in range(self.num_layers):
-            tie_weights(src=source.convs[i], trg=self.convs[i])
-
-    def log(self, writer, step, log_freq):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            writer.add_histogram('train_encoder/%s_hist' % k, v, step)
-            if len(v.shape) > 2:
-                writer.add_image('train_encoder/%s_img' % k, v[0], step)
-
-class PixelDecoder(nn.Module):
-    def __init__(self, envs, obs_shape, feature_dim, num_layers=2, num_filters=64):
-        super().__init__()
-
-        self.num_layers = num_layers
-        self.num_filters = num_filters// (2**(num_layers))
-        self.output_dim=obs_shape
-
-        self.fc = nn.Linear(
-            feature_dim, num_filters
-        )
-
-        self.deconvs = nn.ModuleList()
-
-        for i in range(self.num_layers - 1):
-            self.deconvs.append(
-                nn.Linear(num_filters, num_filters*2)
-            )
-            num_filters*=2
-        self.deconvs.append(
-            nn.Linear(
-                num_filters, np.prod(obs_shape)
-            )
-        )
-
-        self.outputs = dict()
-
-    def forward(self, h):
-        h = torch.relu(self.fc(h))
-        self.outputs['fc'] = h
-
-        # deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
-        deconv = h
-        self.outputs['deconv1'] = deconv
-
-        for i in range(0, self.num_layers - 1):
-            deconv = torch.relu(self.deconvs[i](deconv))
-            self.outputs['deconv%s' % (i + 1)] = deconv
-
-        obs = self.deconvs[-1](deconv)
-        obs = obs.view(obs.shape[0], *self.output_dim)
-        self.outputs['obs'] = obs
-
-        return obs
-
-    def log(self, writer, step, log_freq):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            writer.add_histogram('train_decoder/%s_hist' % k, v, step)
-            if len(v.shape) > 2:
-                writer.add_image('train_decoder/%s_i' % k, v[0], step)
-
-# ===================================
-
 class Agent(nn.Module):
-    def __init__(self, envs, obs_shape ):
+    def __init__(self, envs):
         super().__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
             nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
             nn.ReLU(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(obs_shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
             nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
             nn.ReLU(),
@@ -389,15 +208,11 @@ class Agent(nn.Module):
     def get_value(self, x):
         return self.critic(x)
 
-    def get_action_and_value(self, x, action=None, detach_value=False, detach_policy=True):
-        if detach_policy:
-            logits = self.actor(x.detach())
-        else:
-            logits = self.actor(x)
+    def get_action_and_value(self, x, action=None):
+        logits = self.actor(x)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
 
@@ -430,44 +245,14 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    # setup AE dimension here
-    ae_dim=args.ae_dim
-    # setup random timesteps to collect data for training AE (prior to training of PPO)
-    # (after AE is trained on random samples, this AE is freezed for training PPO)
-    ae_env_step = args.ae_env_step
-    # number of update of AE
-    ae_num_train_step = args.ae_training_step
-    ae_batch_size = args.ae_batch_size
-    # control the l2 regularization of the latent vectors
-    beta=args.beta
-
-    # pretty print the hyperparameters
-    # comment this line if you don't want this effect
-    pprint(vars(args))
-
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
-    import gym
     envs = gym.vector.SyncVectorEnv(
-        envs
+        [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs, obs_shape=ae_dim).to(device)
+    agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-    print(agent)
-    encoder, decoder = (
-        PixelEncoder(envs, envs.single_observation_space.shape, ae_dim).to(device),
-        PixelDecoder(envs, envs.single_observation_space.shape, ae_dim).to(device)
-    )
-    print(encoder)
-    print(decoder)
-    encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
-
-    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape).to(device)
-    buffer_ae_indx = 0
-    ae_buffer_is_full = False
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -480,15 +265,14 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
+    # print(envs.reset())
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
 
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
-    prev_time = time.time()
 
-    # actual training with PPO
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -499,34 +283,27 @@ if __name__ == "__main__":
         for step in range(0, args.num_steps):
             global_step += 1 * args.num_envs
             obs[step] = next_obs
-            buffer_ae[buffer_ae_indx] = next_obs
-            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
-            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
-
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                # encode the observation with AE
-                next_embedding = encoder(next_obs)
-                action, logprob, _, value = agent.get_action_and_value(next_embedding)
+                action, logprob, _, value = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            next_obs, reward, terminate, truncate, info = envs.step(action.cpu().numpy())
             rewards_all += np.array(reward).reshape(rewards_all.shape)
-            done = np.bitwise_or(terminated, truncated)
+            done = np.bitwise_or(terminate, truncate)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
-            # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", reward[i], global_step)
-                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
-                    reward[i] = 0
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
+                    rewards_all[i] = 0
 
             for item in info:
                 if "episode" in item:
@@ -537,9 +314,7 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            # encode the observation with AE
-            next_embedding = encoder(next_obs)
-            next_value = agent.get_value(next_embedding).reshape(1, -1)
+            next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -570,11 +345,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(
-                    encoder(b_obs[mb_inds]), b_actions.long()[mb_inds],
-                    # detach value and policy go here
-                    detach_value=False, detach_policy=True,
-                )
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -611,47 +382,20 @@ if __name__ == "__main__":
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
 
-                # gradient update of encoder and value function
                 optimizer.zero_grad()
-                encoder_optim.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
                 optimizer.step()
-                encoder_optim.step()
-
-                # training auto encoder
-                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                           size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch]
-                # flatten
-                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                # update AE
-                latent = encoder(ae_batch)
-                reconstruct = decoder(latent)
-                assert encoder.outputs['obs'].shape == reconstruct.shape
-                loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
-                writer.add_scalar("ae/loss", loss.item(), global_step)
-
-                encoder_optim.zero_grad()
-                decoder_optim.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                encoder_optim.step()
-                decoder_optim.step()
-
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
 
-        # for some every step, save the current data for training of AE
-        if (global_step/args.num_envs) % (args.save_ae_training_data_freq/args.num_envs) == 0:
-            os.makedirs("ae_data", exist_ok=True)
-            file_path = os.path.join("ae_data", f"step_{global_step}.pt")
-            torch.save(buffer_ae[:current_ae_buffer_size], file_path)
+        # save models
+        if global_step % args.save_model_freq == 0:
+            import os
+            os.makedirs('weights', exist_ok=True)
+            torch.save(agent.state_dict(), f'weights/{args.exp_name}-{global_step}.pt')
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
@@ -669,8 +413,8 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
-        if time.time() - prev_time > 300:
-            print(f'[Step: {global_step}/{args.total_timesteps}]')
-            prev_time = time.time()
     envs.close()
     writer.close()
+    torch.save({
+        'agent': agent.state_dict(),
+    }, 'weights.pt')

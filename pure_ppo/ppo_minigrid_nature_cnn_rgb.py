@@ -233,65 +233,47 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
-
 OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
-        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-
+        n_input_channels = obs_shape[0]
+        
         from torchvision.transforms import Resize
-        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
+        self.resize = Resize((78, 78)) # Input image is resized to []
 
-        self.convs = nn.ModuleList(
-            [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
-        )
-        for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
-            num_filters*=2
-
-        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
-
-        with torch.no_grad():
-            for conv in self.convs:
-                dummy_input = conv(dummy_input)
-
-        output_size = np.prod(dummy_input.shape)
-        OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Sequential(
-            nn.Linear(output_size, output_size),
+        self.convs = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
-            nn.Linear(output_size, self.feature_dim),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.Flatten(),
         )
-        # self.fc = nn.Linear(output_size, self.feature_dim)
-        # self.ln = nn.LayerNorm(self.feature_dim)
+         # Compute shape by doing one forward pass
+        with torch.no_grad():
+            n_flatten = self.convs(torch.randn(obs_shape).float()).view(-1).shape[0]
 
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), )
+        
         self.outputs = dict()
 
     def forward_conv(self, obs):
         obs = self.resize(obs)
-        obs = (obs -128)/128
+        obs = (obs -128)/ 128.
         self.outputs['obs'] = obs
 
-        conv = torch.relu(self.convs[0](obs))
-        self.outputs['conv1'] = conv
-
-        for i in range(1, self.num_layers):
-            conv = torch.relu(self.convs[i](conv))
-            self.outputs['conv%s' % (i + 1)] = conv
-        h = conv.view(conv.size(0), -1)
-        return h
+        conv = self.convs(obs)
+        self.outputs['conv'] = conv
+        return conv
 
     def forward(self, obs, detach=False):
         h = self.forward_conv(obs)
@@ -299,74 +281,16 @@ class PixelEncoder(nn.Module):
         if detach:
             h = h.detach()
 
-        h_fc = self.fc(h)
+        h_fc = self.linear(h)
         self.outputs['fc'] = h_fc
 
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
 
-        # out = torch.tanh(h_norm)
-        out = h_fc
-        self.outputs['latent'] = out
+        self.outputs['latent'] = h_fc
 
-        return out
-
-    def copy_conv_weights_from(self, source):
-        """Tie convolutional layers"""
-        # only tie conv layers
-        for i in range(self.num_layers):
-            tie_weights(src=source.convs[i], trg=self.convs[i])
-
-class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
-        super().__init__()
-
-        self.num_layers = num_layers
-        self.num_filters = num_filters
-        num_filters *= 2**(num_layers-1)
-        self.out_dim = np.prod(OUT_DIM[num_layers])
-
-        self.fc = nn.Sequential(
-            nn.Linear(feature_dim, self.out_dim),
-            nn.ReLU(),
-            nn.Linear(self.out_dim, self.out_dim),
-        )
-        # self.fc = nn.Linear(
-            # feature_dim, self.out_dim
-        # )
-
-        self.deconvs = nn.ModuleList()
-
-        for i in range(self.num_layers - 1):
-            self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
-            )
-            num_filters //= 2
-        self.deconvs.append(
-            nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2,output_padding=1
-            )
-        )
-
-        self.outputs = dict()
-
-    def forward(self, h):
-        h = torch.relu(self.fc(h))
-        self.outputs['fc'] = h
-
-        deconv = h.view(-1, *OUT_DIM[self.num_layers])
-        self.outputs['deconv1'] = deconv
-
-        for i in range(0, self.num_layers - 1):
-            deconv = torch.relu(self.deconvs[i](deconv))
-            self.outputs['deconv%s' % (i + 1)] = deconv
-
-        obs = self.deconvs[-1](deconv)
-        obs = torch.tanh(obs)
-        self.outputs['obs'] = obs
-
-        return obs
-
+        return h_fc
+        
 # ===================================
 
 class Agent(nn.Module):
