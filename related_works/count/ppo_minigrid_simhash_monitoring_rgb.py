@@ -160,15 +160,15 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
+    parser.add_argument("--ae-batch-size", type=int, default=32,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
-        help="L2 norm of the latent vectors")
+        help="not used in this experiment")
     parser.add_argument("--alpha", type=float, default=.1,
-        help="coefficient for L2 norm of adjacent states")
+        help="not used in this experiment")
     parser.add_argument("--lamda", type=float, default=.1,
         help="coefficient for learned hash function")
-    parser.add_argument("--ae-buffer-size", type=int, default=100_000,
+    parser.add_argument("--ae-buffer-size", type=int, default=50_000,
         help="buffer size for training ae, recommend less than 200k ")
     parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
         help="Save training AE data buffer every env steps")
@@ -504,7 +504,7 @@ if __name__ == "__main__":
 
     # HASH table
     if args.hash_bit < 0:
-        args.hash_bit = int(np.log2(args.total_timesteps / 100))
+        args.hash_bit = int(np.log2(args.total_timesteps))
         print(f"Automatically set number of hash bit to {args.hash_bit}")
     hash_table = torch.zeros((2**args.hash_bit,), dtype=torch.int32)
 
@@ -700,12 +700,12 @@ if __name__ == "__main__":
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-                loss = reconstruct_loss - args.lamda*torch.min(latent.square(), (1-latent).square()).mean()
-                writer.add_scalar("ae/loss", loss.item(), global_step)
+                hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
+                ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
 
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
-                loss.backward()
+                ae_loss.backward()
                 nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
                 nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
                 encoder_optim.step()
@@ -758,6 +758,11 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+        # log AE losses
+        writer.add_scalar("AE/loss", ae_loss.item(), global_step)
+        writer.add_scalar("AE/reconstruction_loss", reconstruct_loss.item(), global_step)
+        writer.add_scalar("AE/hash_sign_loss", hash_sign_loss.item(), global_step)
 
         if time.time() - prev_time > 300:
             print(f'[Step: {global_step}/{args.total_timesteps}]')
