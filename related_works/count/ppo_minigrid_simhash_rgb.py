@@ -21,6 +21,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from .sim_hash import HashingBonusEvaluator
+
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
     hyper_param_space, value_space = 30, 40
@@ -414,29 +416,6 @@ class Agent(nn.Module):
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
-class Simhash:
-    A = None
-
-    @classmethod
-    def hash(cls, input: torch.Tensor, hash_bit: int, device=None):
-        if len(input.shape) < 2: input = input.unsqueeze(0)
-        assert len(input.shape) == 2
-        if not device: device = input.device
-
-        if Simhash.A is None:
-            Simhash.A = torch.randn(input.shape[-1], hash_bit).to(device)
-
-        mm = torch.matmul(input, Simhash.A)
-        bits = mm >= 0
-
-        power = 2**torch.arange(hash_bit).to(device)
-        power = power.unsqueeze(0)
-        hash = (power * bits).sum(dim=-1)
-        return hash.type(torch.long)
-
-def ucb(count: torch.Tensor, total_count: int, beta=1.):
-    return beta*np.log(total_count) / (count + 1e-3)
-
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -532,6 +511,9 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
+    
+    hash_bonus = HashingBonusEvaluator(dim_key=ae_dim, obs_processed_flat_dim=args.hash_bit)
+    
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -573,12 +555,11 @@ if __name__ == "__main__":
                 # Compute counts
                 with torch.no_grad():
                     next_embedding = encoder(next_obs)
-                    next_embedding = torch.sign(next_embedding)
-                hash_code = Simhash.hash(next_embedding, hash_bit=args.hash_bit)
-                hash_table[hash_code] += 1
-                state_counts = hash_table[hash_code].to(device)
-                intrinsic_reward = ucb(state_counts, global_step)
-                rewards[step] += args.ucb_coef * intrinsic_reward.view(-1)
+                    next_embedding_np = next_embedding.T.cpu().numpy()
+                    hash_bonus.inc_hash(next_embedding_np)
+                
+                intrinsic_reward = hash_bonus.predict(next_embedding_np)
+                rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
                 
                 # log histogram of count table
                 if (global_step//args.num_envs)%(args.save_count_histogram_every//args.num_envs)==0:
