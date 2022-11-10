@@ -269,7 +269,7 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
         
         from torchvision.transforms import Resize
-        self.resize = Resize((78, 78)) # Input image is resized to []
+        self.resize = Resize((84, 84)) # Input image is resized to []
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]

@@ -247,7 +247,7 @@ class PixelEncoder(nn.Module):
         n_input_channels = obs_shape[0]
         
         from torchvision.transforms import Resize
-        self.resize = Resize((78, 78)) # Input image is resized to []
+        self.resize = Resize((84, 84)) # Input image is resized to []
 
         self.convs = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
