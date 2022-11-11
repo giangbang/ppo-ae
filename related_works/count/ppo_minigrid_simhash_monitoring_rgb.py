@@ -305,11 +305,9 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
+        h_fc = torch.tanh(h_fc)
 
-        # h_norm = self.ln(h_fc)
-        # self.outputs['ln'] = h_norm
-
-        self.outputs['latent'] = torch.tanh(h_fc)
+        self.outputs['latent'] = h_fc
 
         return h_fc
 
@@ -402,7 +400,7 @@ class stateRecording:
 
     def add_count_from_env(self, env):
         self.add_count(*env.agent_pos)
-        
+
     def get_figure_log_scale(self, cap_threshold_cnt=10_000):
         """ plot heat map visitation, similar to `get_figure` but on log scale"""
         import matplotlib
@@ -411,7 +409,7 @@ class stateRecording:
         cnt = np.clip(self.count+1, 0, cap_threshold_cnt)
         plt.clf()
         plt.jet()
-        plt.imshow(cnt, cmap="jet", 
+        plt.imshow(cnt, cmap="jet",
             norm=matplotlib.colors.LogNorm(vmin=1, vmax=cap_threshold_cnt, clip=True))
         cbar=plt.colorbar()
         cbar.set_label('Visitation counts')

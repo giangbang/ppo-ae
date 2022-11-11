@@ -298,8 +298,9 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
+        h_fc = torch.tanh(h_fc)
 
-        self.outputs['latent'] = torch.tanh(h_fc)
+        self.outputs['latent'] = h_fc
 
         return h_fc
 
