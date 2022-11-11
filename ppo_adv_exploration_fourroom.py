@@ -459,7 +459,7 @@ class stateRecording:
         cnt = np.clip(self.count+1, 0, cap_threshold_cnt)
         plt.clf()
         plt.jet()
-        plt.imshow(cnt, cmap="jet", vmin=1, vmax=cap_threshold_cnt, 
+        plt.imshow(cnt, cmap="jet", 
             norm=matplotlib.colors.LogNorm(vmin=1, vmax=cap_threshold_cnt, clip=True))
         cbar=plt.colorbar()
         cbar.set_label('Visitation counts')
