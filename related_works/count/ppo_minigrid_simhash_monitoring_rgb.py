@@ -593,7 +593,8 @@ if __name__ == "__main__":
                 # Compute counts
                 with torch.no_grad():
                     next_embedding = encoder(next_obs)
-                    next_embedding_np = next_embedding.cpu().numpy()
+                    hash_code = torch.round(next_embedding)
+                    next_embedding_np = hash_code.cpu().numpy()
                     hash_bonus.inc_hash(next_embedding_np)
 
                 intrinsic_reward = hash_bonus.predict(next_embedding_np)
