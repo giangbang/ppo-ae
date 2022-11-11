@@ -402,6 +402,25 @@ class stateRecording:
 
     def add_count_from_env(self, env):
         self.add_count(*env.agent_pos)
+        
+    def get_figure_log_scale(self, cap_threshold_cnt=10_000):
+        """ plot heat map visitation, similar to `get_figure` but on log scale"""
+        import matplotlib
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        cnt = np.clip(self.count+1, 0, cap_threshold_cnt)
+        plt.clf()
+        plt.jet()
+        plt.imshow(cnt, cmap="jet", vmin=1, vmax=cap_threshold_cnt, 
+            norm=matplotlib.colors.LogNorm(vmin=1, vmax=cap_threshold_cnt, clip=True))
+        cbar=plt.colorbar()
+        cbar.set_label('Visitation counts')
+
+        # over lay walls
+        plt.imshow(np.zeros_like(cnt, dtype=np.uint8),
+                cmap="gray", alpha=self.mask.astype(np.float),
+                vmin=0, vmax=1)
+        return plt.gcf()
 
     def get_figure(self, cap_threshold_cnt=5000):
         import matplotlib.pyplot as plt
@@ -409,7 +428,7 @@ class stateRecording:
         cnt = np.clip(self.count, 0, cap_threshold_cnt)
         plt.clf()
         plt.jet()
-        plt.imshow(self.count, cmap="jet", vmin=0, vmax=cap_threshold_cnt)
+        plt.imshow(cnt, cmap="jet", vmin=0, vmax=cap_threshold_cnt)
         cbar=plt.colorbar()
         lin_spc = np.linspace(0, cap_threshold_cnt, 6).astype(np.int32)
         # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
@@ -420,7 +439,7 @@ class stateRecording:
         cbar.set_label('Visitation counts')
 
         # over lay walls
-        plt.imshow(np.zeros_like(self.count, dtype=np.uint8),
+        plt.imshow(np.zeros_like(cnt, dtype=np.uint8),
                 cmap="gray", alpha=self.mask.astype(np.float),
                 vmin=0, vmax=1)
         return plt.gcf()
@@ -739,7 +758,7 @@ if __name__ == "__main__":
 
             # log heatmap distribution
             writer.add_figure("state_distribution/heatmap",
-                    record_state.get_figure(args.upper_limit_count), global_step)
+                    record_state.get_figure_log_scale(), global_step)
 
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()

@@ -9,6 +9,6 @@ env = ImgObsWrapper(env)
 env = MovementActionWrapper(env)
 env.reset()
 rc = stateRecording(env)
-rc.get_figure()
+rc.get_figure_log_scale(10_000)
 import matplotlib.pyplot as plt;
 plt.show();
