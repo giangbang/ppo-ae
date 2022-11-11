@@ -309,7 +309,7 @@ class PixelEncoder(nn.Module):
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
 
-        self.outputs['latent'] = h_fc
+        self.outputs['latent'] = torch.tanh(h_fc)
 
         return h_fc
 
@@ -696,7 +696,6 @@ if __name__ == "__main__":
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 # update AE
                 latent = encoder(ae_batch)
-                latent = torch.tanh(latent)
                 reconstruct = decoder(latent)
                 assert encoder.outputs['obs'].shape == reconstruct.shape
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
