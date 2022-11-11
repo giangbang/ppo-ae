@@ -625,32 +625,35 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                # training auto encoder
-                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                           size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch]
-                # flatten
-                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                # update AE
-                latent = encoder(ae_batch)
-                reconstruct = decoder(latent)
-                assert encoder.outputs['obs'].shape == reconstruct.shape
-                loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
-                writer.add_scalar("ae/loss", loss.item(), global_step)
-
-                encoder_optim.zero_grad()
-                decoder_optim.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                encoder_optim.step()
-                decoder_optim.step()
-
-
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
+
+        # training auto encoder
+        current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+        ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                   size=(args.ae_batch_size,))
+        ae_batch = buffer_ae[ae_indx_batch]
+        # flatten
+        ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+        # update AE
+        latent = encoder(ae_batch)
+        reconstruct = decoder(latent)
+        assert encoder.outputs['obs'].shape == reconstruct.shape
+        loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
+        writer.add_scalar("ae/loss", loss.item(), global_step)
+
+        encoder_optim.zero_grad()
+        decoder_optim.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+        nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+        encoder_optim.step()
+        decoder_optim.step()
+
+        # ===========
+        # logging
+        # ===========
 
         # for some every step, save the current data for training of AE
         if (global_step/args.num_envs) % (args.save_ae_training_data_freq/args.num_envs) == 0:
