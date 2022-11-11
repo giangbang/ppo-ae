@@ -13,14 +13,52 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from stable_baselines3.common.atari_wrappers import (  # isort:skip
-    ClipRewardEnv,
-    EpisodicLifeEnv,
-    FireResetEnv,
-    MaxAndSkipEnv,
-    NoopResetEnv,
-)
+from gym.wrappers.atari_preprocessing import AtariPreprocessing
 
+class EpisodicLifeEnv(gym.Wrapper):
+    """
+    This file is copied from Stable-baselines3, with some modification to make it
+    compatible with new `gym` API.
+    Make end-of-life == end-of-episode, but only reset on true game over.
+    Done by DeepMind for the DQN and co. since it helps value estimation.
+    :param env: the environment to wrap
+    """
+
+    def __init__(self, env: gym.Env):
+        gym.Wrapper.__init__(self, env)
+        self.lives = 0
+        self.was_real_done = True
+
+    def step(self, action: int):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.was_real_done = done
+        # check current lives, make loss of life terminal,
+        # then update lives to handle bonus lives
+        lives = self.env.unwrapped.ale.lives()
+        if 0 < lives < self.lives:
+            # for Qbert sometimes we stay in lives == 0 condtion for a few frames
+            # so its important to keep lives > 0, so that we only reset once
+            # the environment advertises done.
+            terminated = True
+        self.lives = lives
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs) -> np.ndarray:
+        """
+        Calls the Gym environment reset, only when lives are exhausted.
+        This way all states are still reachable even though lives are episodic,
+        and the learner need not know about any of this behind-the-scenes.
+        :param kwargs: Extra keywords passed to env.reset() call
+        :return: the first observation of the environment
+        """
+        if self.was_real_done:
+            obs, info = self.env.reset(**kwargs)
+        else:
+            # no-op step to advance from terminal/lost life state
+            obs, _, _, _, info = self.env.step(0)
+        self.lives = self.env.unwrapped.ale.lives()
+        return obs, info
 
 def parse_args():
     # fmt: off
@@ -91,14 +129,9 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         if capture_video:
             if idx == 0:
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        env = NoopResetEnv(env, noop_max=30)
-        env = MaxAndSkipEnv(env, skip=4)
-        env = EpisodicLifeEnv(env)
-        if "FIRE" in env.unwrapped.get_action_meanings():
-            env = FireResetEnv(env)
-        env = ClipRewardEnv(env)
-        env = gym.wrappers.ResizeObservation(env, (84, 84))
-        env = gym.wrappers.GrayScaleObservation(env)
+        # env = EpisodicLifeEnv(env)
+        
+        env = AtariPreprocessing(env)
         env = gym.wrappers.FrameStack(env, 4)
         env.seed(seed)
         env.action_space.seed(seed)
@@ -192,9 +225,12 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
-    next_obs = torch.Tensor(envs.reset()).to(device)
+    next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
+    
+    # measure success and reward
+    rewards_all = np.zeros(args.num_envs)
 
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
@@ -216,10 +252,18 @@ if __name__ == "__main__":
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, done, info = envs.step(action.cpu().numpy())
+            next_obs, reward, terminate, truncate, info = envs.step(action.cpu().numpy())
+            rewards_all += np.array(reward).reshape(rewards_all.shape)
+            done = np.bitwise_or(terminate, truncate)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
+            for i, d in enumerate(done):
+                if d:
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
+                    rewards_all[i] = 0
+                    
             for item in info:
                 if "episode" in item.keys():
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
@@ -324,3 +368,6 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
+    torch.save({
+        'agent': agent.state_dict(),
+    }, 'weights.pt')
