@@ -181,8 +181,10 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--num_layers", type=int, default=50,
+    parser.add_argument("--num_layers", type=int, default=3,
         help="number of hidden dim in ae")
+    parser.add_argument("--num_filters", type=int, default=32,
+        help="number filters of hidden dim in ae")
     parser.add_argument("--ae-batch-size", type=int, default=256,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
