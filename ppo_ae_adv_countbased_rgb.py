@@ -181,6 +181,8 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
+    parser.add_argument("--num_layers", type=int, default=50,
+        help="number of hidden dim in ae")
     parser.add_argument("--ae-batch-size", type=int, default=256,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
@@ -195,6 +197,8 @@ def parse_args():
         help="Save sample reconstruction from AE every env steps")
     parser.add_argument("--weight-decay", type=float, default=0.01,
         help="L2 norm of the weight vectors of decoder")
+    parser.add_argument("--hash-bit", type=int, default=-1,
+        help="Number of bits used in Simhash, default is -1, automatically set according to `total-timesteps`")
 
     # advesatial learning parameters
     parser.add_argument("--adv-rw-coef", type=float, default=0.01,
@@ -291,8 +295,8 @@ class PixelEncoder(nn.Module):
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
-            num_filters*=2
+            self.convs.append(nn.Conv2d(num_filters, num_filters*1, 3, stride=1))
+            num_filters*=1
 
         dummy_input = self.resize(torch.randn((1, ) + obs_shape))
 
@@ -356,7 +360,7 @@ class PixelDecoder(nn.Module):
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        num_filters *= 2**(num_layers-1)
+        num_filters *= num_filters
         self.out_dim = np.prod(OUT_DIM[num_layers])
 
         self.fc = nn.Sequential(
@@ -372,9 +376,10 @@ class PixelDecoder(nn.Module):
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
+                nn.ConvTranspose2d(num_filters, num_filters//1, 3, stride=1)
             )
-            num_filters //= 2
+            num_filters //= 1
+
         self.deconvs.append(
             nn.ConvTranspose2d(
                 num_filters, obs_shape[0], 3, stride=2,output_padding=1
@@ -490,8 +495,12 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
     encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
-        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
+        PixelEncoder(envs.single_observation_space.shape, ae_dim,
+                     num_layers=args.num_layers,
+                     num_filters=args.num_filters).to(device),
+        PixelDecoder(envs.single_observation_space.shape, ae_dim,
+                     num_layers=args.num_layers,
+                     num_filters=args.num_filters).to(device)
     )
     print(encoder)
     print(decoder)
