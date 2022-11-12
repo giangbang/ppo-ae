@@ -442,7 +442,7 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
 def intrinsic_rw(distance):
-    return distance
+    return torch.clip(torch.sqrt(distance), 0, 1)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -591,7 +591,7 @@ if __name__ == "__main__":
 
                 hash_code = Simhash.hash(next_embedding, hash_bit=args.hash_bit)
                 hash_table[hash_code] += 1
-                #state_counts = hash_table[hash_code].to(device)
+                state_counts = hash_table[hash_code].to(device)
                 state_counts = torch.sqrt(state_counts)
 
                 intrinsic_reward = intrinsic_rw(latent_distance)/state_counts

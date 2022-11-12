@@ -158,7 +158,13 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
+    parser.add_argument("--ae-learning-rate", type=float, default=1e-3,
+        help="the learning rate of the AE-optimizer")
+    parser.add_argument("--num-layers", type=int, default=5,
+        help="Number of layers")
+    parser.add_argument("--num-filters", type=int, default=32,
+        help="Number of filters")
+    parser.add_argument("--ae-batch-size", type=int, default=32,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
@@ -262,16 +268,19 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
+        # self.resize = Resize((76, 76)) # Input image is resized to [64x64]
+        #self.resize = nn.ZeroPad2d(4)
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
-            num_filters*=2
+            self.convs.append(nn.Conv2d(num_filters, num_filters*1, 3, stride=1))
+            num_filters*=1
 
-        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
+        #dummy_input = self.resize(torch.randn((1, ) + obs_shape))
+        dummy_input = torch.randn((1, ) + obs_shape)
+        
 
         with torch.no_grad():
             for conv in self.convs:
@@ -279,9 +288,11 @@ class PixelEncoder(nn.Module):
 
         output_size = np.prod(dummy_input.shape)
         OUT_DIM[num_layers] = dummy_input.shape[1:]
+        print(output_size)
+
         self.fc = nn.Sequential(
-            nn.Linear(output_size, output_size),
-            nn.ReLU(),
+            #nn.Linear(output_size, output_size),
+            #nn.ReLU(),
             nn.Linear(output_size, self.feature_dim),
         )
         # self.fc = nn.Linear(output_size, self.feature_dim)
@@ -290,7 +301,7 @@ class PixelEncoder(nn.Module):
         self.outputs = dict()
 
     def forward_conv(self, obs):
-        obs = self.resize(obs)
+        # obs = self.resize(obs)
         obs = (obs -128)/ 128.
         self.outputs['obs'] = obs
 
@@ -333,13 +344,13 @@ class PixelDecoder(nn.Module):
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        num_filters *= 2**(num_layers-1)
+        #num_filters *= 2**(num_layers-1)
         self.out_dim = np.prod(OUT_DIM[num_layers])
 
         self.fc = nn.Sequential(
             nn.Linear(feature_dim, self.out_dim),
-            nn.ReLU(),
-            nn.Linear(self.out_dim, self.out_dim),
+            #nn.ReLU(),
+            #nn.Linear(self.out_dim, self.out_dim),
         )
         # self.fc = nn.Linear(
             # feature_dim, self.out_dim
@@ -349,9 +360,9 @@ class PixelDecoder(nn.Module):
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
+                nn.ConvTranspose2d(num_filters, num_filters//1, 3, stride=1)
             )
-            num_filters //= 2
+            num_filters //= 1
         self.deconvs.append(
             nn.ConvTranspose2d(
                 num_filters, obs_shape[0], 3, stride=2,output_padding=1
@@ -412,7 +423,7 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
 def intrinsic_rw(distance):
-    return distance
+    return torch.clip(distance, min=0., max=1.)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -467,14 +478,20 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
     encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
-        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
+        PixelEncoder(envs.single_observation_space.shape,
+            feature_dim=ae_dim,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters).to(device),
+        PixelDecoder(envs.single_observation_space.shape,
+            feature_dim=ae_dim,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters).to(device),
     )
     print(encoder)
     print(decoder)
 
-    encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
+    encoder_optim = optim.Adam(encoder.parameters(), lr=args.ae_learning_rate, eps=1e-5)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.ae_learning_rate,
                         eps=1e-5, weight_decay=args.weight_decay)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
@@ -550,6 +567,7 @@ if __name__ == "__main__":
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
                     latent_distance = ((prev_embedding-next_embedding)**2).sum(dim=-1)
 
+                #intrinsic_reward = intrinsic_rw(torch.sqrt(latent_distance))
                 intrinsic_reward = intrinsic_rw(latent_distance)
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
@@ -560,7 +578,7 @@ if __name__ == "__main__":
             for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
-                    writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.01, global_step)
                     rewards_all[i] = 0
 
             for item in info:
@@ -677,6 +695,7 @@ if __name__ == "__main__":
                 writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
                 adjacent_norm = ((latent-next_latent)**2).sum(dim=-1).mean()
+                #adjacent_loss = args.alpha * intrinsic_rw(torch.sqrt(adjacent_norm))
                 adjacent_loss = args.alpha * intrinsic_rw(adjacent_norm)
                 writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
                 # aggregate
