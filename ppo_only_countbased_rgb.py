@@ -478,7 +478,8 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
 def intrinsic_rw(distance):
-    return torch.clip(distance, 0, 1)
+    # return torch.clip(distance, 0, 1)
+    return 1.
 
 if __name__ == "__main__":
     args = parse_args()
