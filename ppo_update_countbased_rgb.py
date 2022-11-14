@@ -215,6 +215,8 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
+    parser.add_argument("--img_size", type=int, default=64,
+        help="number of img_size in ae")
     parser.add_argument("--num_layers", type=int, default=3,
         help="number of hidden dim in ae")
     parser.add_argument("--num_filters", type=int, default=32,
@@ -315,7 +317,7 @@ OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, img_size, feature_dim=50, num_layers=5, num_filters=8):
         super().__init__()
 
         assert len(obs_shape) == 3
@@ -325,7 +327,7 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
+        self.resize = Resize((img_size, img_size)) # Input image is resized to [64x64]
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
@@ -393,7 +395,7 @@ class PixelEncoder(nn.Module):
             tie_weights(src=source.convs[i], trg=self.convs[i])
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, img_size, feature_dim=50, num_layers=5, num_filters=8):
         super().__init__()
 
         self.num_layers = num_layers
@@ -533,10 +535,10 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
     encoder, decoder = (
-        PixelEncoder(envs.single_observation_space.shape, ae_dim,
+        PixelEncoder(envs.single_observation_space.shape, args.img_size, ae_dim,
                      num_layers=args.num_layers,
                      num_filters=args.num_filters).to(device),
-        PixelDecoder(envs.single_observation_space.shape, ae_dim,
+        PixelDecoder(envs.single_observation_space.shape, args.img_size, ae_dim,
                      num_layers=args.num_layers,
                      num_filters=args.num_filters).to(device)
     )
