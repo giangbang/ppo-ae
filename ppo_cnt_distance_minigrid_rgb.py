@@ -379,7 +379,7 @@ class Agent(nn.Module):
 class Episode:
     """ Save the embeddings of all states in a trajectory"""
     def __init__(self, env, embedding_dim, max_len=1000, device='cpu'):
-        self.max_len = max(max_len, env.envs[0].max_steps)
+        self.max_len = min(max_len, env.envs[0].max_steps)
         self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
         self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
         self.device = device

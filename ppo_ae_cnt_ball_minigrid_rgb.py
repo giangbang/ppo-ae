@@ -382,7 +382,7 @@ class Agent(nn.Module):
 class Episode:
     """ Save the embeddings of all states in a trajectory"""
     def __init__(self, env, embedding_dim, max_len=1000, device="cpu"):
-        self.max_len = max(max_len, env.envs[0].get("_max_episode_steps", max_len))
+        self.max_len = min(max_len, env.envs[0].max_steps)
         self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
         self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
         self.device = device
@@ -395,17 +395,17 @@ class Episode:
     def reset_at(self, i):
         self.indx[i] = 0
         
-    def get_states(self, i):
+    def get_state(self, i):
         return self.obs[:self.indx[i], i]
         
     def get_states(self):
-        res = [self.get_states(i) for i in range(len(self.indx))]
+        res = [self.get_state(i) for i in range(len(self.indx))]
         return res
         
     def count_in_ball(self, current_embeddings, eps=5):
         embeddings_in_episode = self.get_states()
         latent_distance = [
-            (traj_embeddings-current_embedding.unsqueeze(0).norm(dim=-1, keepdim=True)
+            (traj_embeddings-current_embedding.unsqueeze(0)).norm(dim=-1, keepdim=True)
             for current_embedding, traj_embeddings in zip(current_embeddings, embeddings_in_episode)
         ]
         
@@ -524,7 +524,7 @@ if __name__ == "__main__":
             global_step += 1 * args.num_envs
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
-            done_buffer[buffer_ae_indx] = next_done.cpu()
+            done_buffer[buffer_ae_indx] = next_done.cpu().reshape(done_buffer[buffer_ae_indx].shape)
             
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
@@ -562,7 +562,7 @@ if __name__ == "__main__":
                     
                     count_in_ball = episode_record.count_in_ball(next_embedding, eps=args.neighbor_radius)
                     count_in_ball = count_in_ball.to(device)
-                intrinsic_reward = 1/count_in_ball
+                intrinsic_reward = 1/(count_in_ball+1)
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
