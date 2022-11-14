@@ -1,19 +1,11 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
-
+# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
 import argparse
 import os
 import random
 import time
 from distutils.util import strtobool
-import minigrid
-import gym
-from gym import spaces
-import numpy as np
-from functools import reduce
-import operator
 
 import gym
-import gymnasium
 import numpy as np
 import torch
 import torch.nn as nn
@@ -21,6 +13,52 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from gym.wrappers.atari_preprocessing import AtariPreprocessing
+
+class EpisodicLifeEnv(gym.Wrapper):
+    """
+    This file is copied from Stable-baselines3, with some modification to make it
+    compatible with new `gym` API.
+    Make end-of-life == end-of-episode, but only reset on true game over.
+    Done by DeepMind for the DQN and co. since it helps value estimation.
+    :param env: the environment to wrap
+    """
+
+    def __init__(self, env: gym.Env):
+        gym.Wrapper.__init__(self, env)
+        self.lives = 0
+        self.was_real_done = True
+
+    def step(self, action: int):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.was_real_done = done
+        # check current lives, make loss of life terminal,
+        # then update lives to handle bonus lives
+        lives = self.env.unwrapped.ale.lives()
+        if 0 < lives < self.lives:
+            # for Qbert sometimes we stay in lives == 0 condtion for a few frames
+            # so its important to keep lives > 0, so that we only reset once
+            # the environment advertises done.
+            terminated = True
+        self.lives = lives
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs) -> np.ndarray:
+        """
+        Calls the Gym environment reset, only when lives are exhausted.
+        This way all states are still reachable even though lives are episodic,
+        and the learner need not know about any of this behind-the-scenes.
+        :param kwargs: Extra keywords passed to env.reset() call
+        :return: the first observation of the environment
+        """
+        if self.was_real_done:
+            obs, info = self.env.reset(**kwargs)
+        else:
+            # no-op step to advance from terminal/lost life state
+            obs, _, _, _, info = self.env.step(0)
+        self.lives = self.env.unwrapped.ale.lives()
+        return obs, info
 
 def parse_args():
     # fmt: off
@@ -43,13 +81,13 @@ def parse_args():
         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Algorithm specific arguments
-    parser.add_argument("--env-id", type=str, default="CartPole-v1",
+    parser.add_argument("--env-id", type=str, default="BreakoutNoFrameskip-v4",
         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=500000,
+    parser.add_argument("--total-timesteps", type=int, default=10000000,
         help="total timesteps of the experiments")
     parser.add_argument("--learning-rate", type=float, default=2.5e-4,
         help="the learning rate of the optimizer")
-    parser.add_argument("--num-envs", type=int, default=4,
+    parser.add_argument("--num-envs", type=int, default=8,
         help="the number of parallel game environments")
     parser.add_argument("--num-steps", type=int, default=128,
         help="the number of steps to run in each environment per policy rollout")
@@ -65,7 +103,7 @@ def parse_args():
         help="the K epochs to update the policy")
     parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggles advantages normalization")
-    parser.add_argument("--clip-coef", type=float, default=0.2,
+    parser.add_argument("--clip-coef", type=float, default=0.1,
         help="the surrogate clipping coefficient")
     parser.add_argument("--clip-vloss", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggles whether or not to use a clipped loss for the value function, as per the paper.")
@@ -77,100 +115,25 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--save-model-freq", type=int, default=200_000,
-        help="Save model every env steps")
-
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
 
-class CustomFlatObsWrapper(gym.core.ObservationWrapper):
-    '''
-    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
-    Which only considers the case where the observation contains both `image` and `mission`
-    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
-    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
-    '''
-    def __init__(self, env, maxStrLen=96):
-        super().__init__(env)
-
-        self.maxStrLen = maxStrLen
-        self.numCharCodes = 27
-
-        if isinstance(env.observation_space, spaces.Dict):
-            imgSpace = env.observation_space.spaces['image']
-        else:
-            imgSpace = env.observation_space
-        imgSize = reduce(operator.mul, imgSpace.shape, 1)
-
-        obs_shape = np.array(self.reset()[0]).shape
-
-        self.observation_space = spaces.Box(
-            low=0,
-            high=10,
-            shape=(np.prod(obs_shape),),
-            dtype='uint8'
-        )
-
-        self.cachedStr = None
-        self.cachedArray = None
-
-    def observation(self, obs):
-        if isinstance(obs, dict):
-            return self._observation(obs)
-        return obs.flatten()
-
-    def _observation(self, obs):
-        image = obs['image']
-        mission = obs['mission']
-
-        # Cache the last-encoded mission string
-        if mission != self.cachedStr:
-            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
-            mission = mission.lower()
-
-            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
-
-            for idx, ch in enumerate(mission):
-                if ch >= 'a' and ch <= 'z':
-                    chNo = ord(ch) - ord('a')
-                elif ch == ' ':
-                    chNo = ord('z') - ord('a') + 1
-                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
-                strArray[idx, chNo] = 1
-
-            self.cachedStr = mission
-            self.cachedArray = strArray
-
-        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
-
-        return obs
-
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
-        env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper
-        env = ImgObsWrapper(env)
-        env = CustomFlatObsWrapper(env)
-
-        env.action_space = gym.spaces.Discrete(env.action_space.n)
-        env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int),
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*10
-        )
-        print("obs shape", np.array(env.reset()[0]).shape)
-
+        env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
             if idx == 0:
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        try:
-            env.seed(seed)
-        except:
-            print("cannot seed the environment")
+        # env = EpisodicLifeEnv(env)
+        
+        env = AtariPreprocessing(env)
+        env = gym.wrappers.FrameStack(env, 4)
+        env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
@@ -184,34 +147,33 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+        self.network = nn.Sequential(
+            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
             nn.ReLU(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
+            layer_init(nn.Linear(64 * 7 * 7, 512)),
+            nn.ReLU(),
         )
-        self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
-        )
+        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        self.critic = layer_init(nn.Linear(512, 1), std=1)
 
     def get_value(self, x):
-        return self.critic(x)
+        return self.critic(self.network(x / 255.0))
 
     def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
+        hidden = self.network(x / 255.0)
+        logits = self.actor(hidden)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
+        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
 
 if __name__ == "__main__":
@@ -263,11 +225,10 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
-    # print(envs.reset())
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
-
+    
     # measure success and reward
     rewards_all = np.zeros(args.num_envs)
 
@@ -302,9 +263,9 @@ if __name__ == "__main__":
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
                     writer.add_scalar("train/success", rewards_all[i] > 0.1, global_step)
                     rewards_all[i] = 0
-
+                    
             for item in info:
-                if "episode" in item:
+                if "episode" == item:
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
@@ -389,12 +350,6 @@ if __name__ == "__main__":
                 if approx_kl > args.target_kl:
                     break
 
-        # save models
-        if global_step % args.save_model_freq == 0:
-            import os
-            os.makedirs('weights', exist_ok=True)
-            torch.save(agent.state_dict(), f'weights/{args.exp_name}-{global_step}.pt')
-
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -413,3 +368,6 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
+    torch.save({
+        'agent': agent.state_dict(),
+    }, 'weights.pt')

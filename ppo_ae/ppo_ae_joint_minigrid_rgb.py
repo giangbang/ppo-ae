@@ -168,6 +168,8 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
+    parser.add_argument("--weight-decay", type=float, default=0.,
+        help="L2 norm of the weight vectors of decoder")
 
 
     args = parser.parse_args()
@@ -233,55 +235,36 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
-
 OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
-        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
+        self.resize = Resize((84, 84)) # Input image is resized to []
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
-            num_filters*=2
+            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
 
-        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
-
-        with torch.no_grad():
-            for conv in self.convs:
-                dummy_input = conv(dummy_input)
-
-        output_size = np.prod(dummy_input.shape)
-        OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Sequential(
-            nn.Linear(output_size, output_size),
-            nn.ReLU(),
-            nn.Linear(output_size, self.feature_dim),
-        )
-        # self.fc = nn.Linear(output_size, self.feature_dim)
+        out_dim = OUT_DIM[num_layers]
+        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
     def forward_conv(self, obs):
         obs = self.resize(obs)
-        obs = (obs -128)/128
+        obs = (obs -128)/ 128.
         self.outputs['obs'] = obs
 
         conv = torch.relu(self.convs[0](obs))
@@ -290,6 +273,7 @@ class PixelEncoder(nn.Module):
         for i in range(1, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
+
         h = conv.view(conv.size(0), -1)
         return h
 
@@ -305,46 +289,31 @@ class PixelEncoder(nn.Module):
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
 
-        # out = torch.tanh(h_norm)
-        out = h_fc
-        self.outputs['latent'] = out
+        self.outputs['latent'] = h_fc
 
-        return out
-
-    def copy_conv_weights_from(self, source):
-        """Tie convolutional layers"""
-        # only tie conv layers
-        for i in range(self.num_layers):
-            tie_weights(src=source.convs[i], trg=self.convs[i])
+        return h_fc
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        num_filters *= 2**(num_layers-1)
-        self.out_dim = np.prod(OUT_DIM[num_layers])
+        self.out_dim = OUT_DIM[num_layers]
 
-        self.fc = nn.Sequential(
-            nn.Linear(feature_dim, self.out_dim),
-            nn.ReLU(),
-            nn.Linear(self.out_dim, self.out_dim),
+        self.fc = nn.Linear(
+            feature_dim, num_filters * self.out_dim * self.out_dim
         )
-        # self.fc = nn.Linear(
-            # feature_dim, self.out_dim
-        # )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
+                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
             )
-            num_filters //= 2
         self.deconvs.append(
             nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2,output_padding=1
+                num_filters, obs_shape[0], 3, stride=2, output_padding=1
             )
         )
 
@@ -354,7 +323,7 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        deconv = h.view(-1, *OUT_DIM[self.num_layers])
+        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
@@ -454,10 +423,23 @@ if __name__ == "__main__":
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
-    encoder = PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device)
+    encoder, decoder = (
+        PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
+        PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
+    )
     print(encoder)
+    print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
+                        eps=1e-5, weight_decay=args.weight_decay)
+
+    args.ae_buffer_size = args.ae_buffer_size//args.num_envs
+
+    buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
+                dtype=torch.uint8)
+    buffer_ae_indx = 0
+    ae_buffer_is_full = False
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -490,6 +472,10 @@ if __name__ == "__main__":
         for step in range(0, args.num_steps):
             global_step += 1 * args.num_envs
             obs[step] = next_obs
+            buffer_ae[buffer_ae_indx] = next_obs.cpu()
+            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
+            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
+
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
@@ -512,7 +498,7 @@ if __name__ == "__main__":
             for i, d in enumerate(done):
                 if d:
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
-                    writer.add_scalar("train/success", rewards_all[i] >= 0.05, global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
                     rewards_all[i] = 0
 
             for item in info:
@@ -607,10 +593,60 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
+
+        # training auto encoder
+        current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+        ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                   size=(args.ae_batch_size,))
+        ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+        # flatten
+        ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+        # update AE
+        latent = encoder(ae_batch)
+        reconstruct = decoder(latent)
+        assert encoder.outputs['obs'].shape == reconstruct.shape
+
+        latent_norm = (latent**2).sum(dim=-1).mean()
+        loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
+        writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
+        writer.add_scalar("ae/loss", loss.item(), global_step)
+
+        encoder_optim.zero_grad()
+        decoder_optim.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+        nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+        encoder_optim.step()
+        decoder_optim.step()
+
+        # ===========
+        # logging
+        # ===========
+
+        # for some every step, save the current data for training of AE
+        if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
+            os.makedirs("ae_data", exist_ok=True)
+            file_path = os.path.join("ae_data", f"step_{global_step}.pt")
+            torch.save(buffer_ae[:current_ae_buffer_size], file_path)
+
+        # for some every step, save the image reconstructions of AE, for debugging purpose
+        if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
+            # AE reconstruction
+            save_reconstruction = reconstruct[0].detach()
+            save_reconstruction = (save_reconstruction*128 + 128).clip(0, 255).cpu()
+
+            # AE target
+            ae_target = encoder.outputs['obs'][0].detach()
+            ae_target = (ae_target*128 + 128).clip(0, 255).cpu()
+
+            # log
+            writer.add_image('image/AE reconstruction', save_reconstruction.type(torch.uint8), global_step)
+            writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
+            writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
+            prev_global_timestep = global_step
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
@@ -636,4 +672,5 @@ if __name__ == "__main__":
     torch.save({
         'agent': agent.state_dict(),
         'encoder': encoder,
+        'decoder': decoder
     }, 'weights.pt')

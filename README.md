@@ -13,6 +13,7 @@ pip install -r requirements.txt
 - `ppo_minigrid_rgb.py`: Train PPO on minigrid, observation space is image
 - `ppo_ae_lsh_counting_rgb.py`: Training a PPO jointly with an Auto Encoder, observation space is image, the rewards are augmented with UCB intrinsic rewards estimated from a hasing count-based method.
 - `ppo_ae_separate_minigrid_rgb.py`: Train PPO on a pre-trained Auto-Encoder, data for AE is collected prior to the RL training and by a random agent
+= `ppo_adv_exploration_fourroom.py`: Train PPO, using adversarial exploration without extrinsic reward, heatmap is logged to visualize the state visitation exploration
 
 ## Review code
 - [x] `ppo_ae_joint_minigrid_rgb.py`

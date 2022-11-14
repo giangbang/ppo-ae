@@ -21,6 +21,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from simhash import HashingBonusEvaluator
+
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
     hyper_param_space, value_space = 30, 40
@@ -158,29 +160,39 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
+    parser.add_argument("--ae-batch-size", type=int, default=32,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
-        help="L2 norm of the latent vectors")
+        help="not used in this experiment")
     parser.add_argument("--alpha", type=float, default=.1,
-        help="coefficient for L2 norm of adjacent states")
-    parser.add_argument("--ae-buffer-size", type=int, default=100_000,
+        help="not used in this experiment")
+    parser.add_argument("--lamda", type=float, default=.1,
+        help="coefficient for learned hash function")
+    parser.add_argument("--ae-buffer-size", type=int, default=50_000,
         help="buffer size for training ae, recommend less than 200k ")
     parser.add_argument("--save-ae-training-data-freq", type=int, default=-1,
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-    parser.add_argument("--weight-decay", type=float, default=0.01,
-        help="L2 norm of the weight vectors of decoder")
 
-    # advesatial learning parameters
-    parser.add_argument("--adv-rw-coef", type=float, default=0.01,
-        help="coefficient for intrinsic reward")
+    # count-based parameters
+    parser.add_argument("--hash-bit", type=int, default=-1,
+        help="Number of bits used in Simhash, default is -1, automatically set according to `total-timesteps`")
+    parser.add_argument("--ucb-coef", type=float, default=0.01,
+        help="coefficient for ucb intrinsic reward")
     parser.add_argument("--ae-warmup-steps", type=int, default=1000,
-        help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
+        help="Warmup phase for VAE, states visited in these first warmup steps are not counted for UCB")
+    parser.add_argument("--save-count-histogram-every", type=int, default=5_000,
+        help="Interval to save the histogram of the count table")
+
+    # parameters for ploting heatmap
+    parser.add_argument("--upper-limit-count", type=int, default=500,
+        help="The upper limit for plotting the heatmap, higher values count than this will be capped")
 
 
     args = parser.parse_args()
+    # only work with 1 environment
+    args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
@@ -207,9 +219,10 @@ class TransposeImageWrapper(gym.ObservationWrapper):
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
+        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper, ReseedWrapper
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
+        env = ReseedWrapper(env)
         env = TransposeImageWrapper(env)
 
         env.action_space = gym.spaces.Discrete(env.action_space.n)
@@ -243,48 +256,29 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
-
 OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
-        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
+        self.resize = Resize((84, 84)) # Input image is resized to []
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
-            num_filters*=2
+            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
 
-        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
-
-        with torch.no_grad():
-            for conv in self.convs:
-                dummy_input = conv(dummy_input)
-
-        output_size = np.prod(dummy_input.shape)
-        OUT_DIM[num_layers] = dummy_input.shape[1:]
-        self.fc = nn.Sequential(
-            nn.Linear(output_size, output_size),
-            nn.ReLU(),
-            nn.Linear(output_size, self.feature_dim),
-        )
-        # self.fc = nn.Linear(output_size, self.feature_dim)
+        out_dim = OUT_DIM[num_layers]
+        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
@@ -300,6 +294,7 @@ class PixelEncoder(nn.Module):
         for i in range(1, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
+
         h = conv.view(conv.size(0), -1)
         return h
 
@@ -310,51 +305,33 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
-        self.outputs['fc'] = h_fc
+        h_fc = torch.sigmoid(h_fc)
 
-        # h_norm = self.ln(h_fc)
-        # self.outputs['ln'] = h_norm
+        self.outputs['latent'] = h_fc
 
-        # out = torch.ReLU(h_norm)
-        out = h_fc
-        self.outputs['latent'] = out
-
-        return out
-
-    def copy_conv_weights_from(self, source):
-        """Tie convolutional layers"""
-        # only tie conv layers
-        for i in range(self.num_layers):
-            tie_weights(src=source.convs[i], trg=self.convs[i])
+        return h_fc
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        num_filters *= 2**(num_layers-1)
-        self.out_dim = np.prod(OUT_DIM[num_layers])
+        self.out_dim = OUT_DIM[num_layers]
 
-        self.fc = nn.Sequential(
-            nn.Linear(feature_dim, self.out_dim),
-            nn.ReLU(),
-            nn.Linear(self.out_dim, self.out_dim),
+        self.fc = nn.Linear(
+            feature_dim, num_filters * self.out_dim * self.out_dim
         )
-        # self.fc = nn.Linear(
-            # feature_dim, self.out_dim
-        # )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
+                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
             )
-            num_filters //= 2
         self.deconvs.append(
             nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2,output_padding=1
+                num_filters, obs_shape[0], 3, stride=2, output_padding=1
             )
         )
 
@@ -364,7 +341,7 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        deconv = h.view(-1, *OUT_DIM[self.num_layers])
+        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
@@ -411,98 +388,68 @@ class Agent(nn.Module):
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
-def intrinsic_rw(distance):
-    return distance
+class stateRecording:
+    """recording state distributions"""
+    def __init__(self, env):
+        self.shape = env.grid.height, env.grid.width
+        self.count = np.zeros(self.shape, dtype=np.int32)
+        self.extract_mask(env)
 
-def visualize_encodings(ae_buffer, hash_vals, encoder, count_table,
-                global_step, buffer_size, device, n_samples=500, writer=None,
-                saveimg=False):
-    """ function for visualize the embeddings with visitation freq """
-    from sklearn.manifold import TSNE
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import torch
+    def add_count(self, w, h):
+        self.count[h, w] += 1
 
-    indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
+    def add_count_from_env(self, env):
+        self.add_count(*env.agent_pos)
 
-    samples = samples.float().to(device)
-    with torch.no_grad():
-        encodings = encoder(samples).cpu().numpy()
+    def get_figure_log_scale(self, cap_threshold_cnt=10_000):
+        """ plot heat map visitation, similar to `get_figure` but on log scale"""
+        import matplotlib
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        cnt = np.clip(self.count+1, 0, cap_threshold_cnt)
+        plt.clf()
+        plt.jet()
+        plt.imshow(cnt, cmap="jet",
+            norm=matplotlib.colors.LogNorm(vmin=1, vmax=cap_threshold_cnt, clip=True))
+        cbar=plt.colorbar()
+        cbar.set_label('Visitation counts')
 
-    hashes = hash_vals[indx].reshape(-1)
-    assert len(hashes) == len(samples)
-    cnt_map = [count_table.get(h, 0) for h in hashes]
-    cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map+1)
-    cnt_map /= np.max(cnt_map) + 1e-3
+        # over lay walls
+        plt.imshow(np.zeros_like(cnt, dtype=np.uint8),
+                cmap="gray", alpha=self.mask.astype(np.float),
+                vmin=0, vmax=1)
+        return plt.gcf()
 
-    X_embedded = TSNE(n_components=2, learning_rate='auto',
-                   init='random', perplexity=3).fit_transform(encodings)
+    def get_figure(self, cap_threshold_cnt=5000):
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        cnt = np.clip(self.count, 0, cap_threshold_cnt)
+        plt.clf()
+        plt.jet()
+        plt.imshow(cnt, cmap="jet", vmin=0, vmax=cap_threshold_cnt)
+        cbar=plt.colorbar()
+        lin_spc = np.linspace(0, cap_threshold_cnt, 6).astype(np.int32)
+        # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
+        cbar.update_ticks()
+        lin_spc = [str(i) for i in lin_spc]
+        lin_spc[-1] = ">"+lin_spc[-1]
+        cbar.ax.set_yticklabels(lin_spc)
+        cbar.set_label('Visitation counts')
 
-    plt.clf()
-    plt.jet()
-    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=cnt_map, edgecolors='black')
-    cb = plt.colorbar()
-    cb.set_label('visitation counts')
-    
-    if saveimg:
-        """ Save to png files """
-        img_path = f'encodings_{global_step}.png'
-        plt.savefig(img_path)
-    if writer is not None:
-        # write to tensorboard writer
-        writer.add_figure("embeddings/random_samples", plt.gcf(), global_step)
-    
-def visualize_encodings_within_trajectory(ae_buffer, hash_vals, encoder, count_table,
-                global_step, buffer_size, device, n_samples=2000, 
-                sample_each_traj=200, writer=None, saveimg=False):
-    """ function for visualize the embeddings from the same trajectories with visitation freq """
-    from sklearn.manifold import TSNE
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import torch
+        # over lay walls
+        plt.imshow(np.zeros_like(cnt, dtype=np.uint8),
+                cmap="gray", alpha=self.mask.astype(np.float),
+                vmin=0, vmax=1)
+        return plt.gcf()
 
-    n_samples = n_samples // sample_each_traj
+    def extract_mask(self, env):
+        self.mask = np.zeros_like(self.count)
+        for j in range(env.grid.height):
+            for i in range(env.grid.width):
+                c = env.grid.get(i, j)
+                if c is not None and c.type=="wall":
+                    self.mask[j, i]=1
 
-    indx = torch.randint(low=0, high=buffer_size, size=(n_samples,))
-    indx = indx.view(-1, 1) + torch.arange(sample_each_traj).view(1, -1)
-    indx = indx.view(-1) % buffer_size
-    
-    samples = ae_buffer[indx].view((-1, *ae_buffer.shape[2:]))
-
-    samples = samples.float().to(device)
-    with torch.no_grad():
-        encodings = encoder(samples).cpu().numpy()
-
-    hashes = hash_vals[indx].reshape(-1)
-    assert len(hashes) == len(samples)
-    cnt_map = [count_table.get(h, 0) for h in hashes]
-    cnt_map = np.array(cnt_map, dtype=np.float32)
-    cnt_map = np.log(cnt_map+1)
-    cnt_map /= np.max(cnt_map) + 1e-3
-
-    X_embedded = TSNE(n_components=2, learning_rate='auto',
-                   init='random', perplexity=3).fit_transform(encodings)
-    plt.clf()
-    for x, y in zip(*X_embedded.reshape(
-                (-1, sample_each_traj, 2)
-            ).transpose([2, 0, 1]) ):
-        plt.plot(x, y, alpha=0.6, zorder=-1)
-    
-    plt.jet()
-    plt.scatter(X_embedded[:, 0], X_embedded[:, 1], 
-                c=cnt_map, edgecolors='black', zorder=1)
-    cb = plt.colorbar()
-    cb.set_label('visitation counts')
-        
-    if saveimg:
-        """ Save to png files """
-        img_path = f'encodings_traj_{global_step}.png'
-        plt.savefig(img_path)
-    if writer is not None:
-        # write to tensorboard writer
-        writer.add_figure("embeddings/traj_samples", plt.gcf(), global_step)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -538,8 +485,6 @@ if __name__ == "__main__":
     ae_dim=args.ae_dim
 
     ae_batch_size = args.ae_batch_size
-    # control the l2 regularization of the latent vectors
-    beta=args.beta
 
     # pretty print the hyperparameters
     # comment this line if you don't want this effect
@@ -564,23 +509,21 @@ if __name__ == "__main__":
     print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
-                        eps=1e-5, weight_decay=args.weight_decay)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
-    """
-    count table and hash values
-    """
-    count_table = {}
-    # using numpy array since torch tensor does not support object type
-    hash_vals = np.empty((args.ae_buffer_size, args.num_envs), dtype='O')
-    hash_size=64
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
                 dtype=torch.uint8)
     # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
+
+    # HASH table
+    if args.hash_bit < 0:
+        args.hash_bit = int(np.log2(args.total_timesteps))
+        print(f"Automatically set number of hash bit to {args.hash_bit}")
+    hash_table = torch.zeros((2**args.hash_bit,), dtype=torch.int32)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -601,6 +544,10 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
+    record_state = stateRecording(envs.envs[0])
+    record_state.add_count_from_env(envs.envs[0])
+
+    hash_bonus = HashingBonusEvaluator(dim_key=args.hash_bit, obs_processed_flat_dim=ae_dim)
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -615,6 +562,8 @@ if __name__ == "__main__":
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
             # done_buffer[buffer_ae_indx] = next_done.cpu()
+            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
+            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
             dones[step] = next_done
 
@@ -629,33 +578,39 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            record_state.add_count_from_env(envs.envs[0])
+
+            """ hide reward from agents """
+            reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
-            # intrinsic rewards
+            # UCB rewards
             if global_step > args.ae_warmup_steps:
+                # Compute counts
                 with torch.no_grad():
-                    prev_embedding = next_embedding
                     next_embedding = encoder(next_obs)
-                    if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
-                    if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
-                    latent_distance = ((prev_embedding-next_embedding)**2).sum(dim=-1)
+                    hash_code = torch.round(next_embedding)
+                    next_embedding_np = hash_code.cpu().numpy()
+                    hash_bonus.inc_hash(next_embedding_np)
 
-                intrinsic_reward = intrinsic_rw(latent_distance)
-                intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
-                rewards[step] += intrinsic_reward
+                intrinsic_reward = hash_bonus.predict(next_embedding_np)
+                intrinsic_reward = torch.tensor(intrinsic_reward).to(device)
+                rewards[step] += args.ucb_coef * intrinsic_reward.view(rewards[step].shape)
 
-                writer.add_scalar("rewards/intrinsic_rewards", intrinsic_reward.mean(), global_step)
+                # log histogram of count table
+                if (global_step//args.num_envs)%(args.save_count_histogram_every//args.num_envs)==0:
+                    writer.add_histogram("counts/count_histogram", hash_table, global_step)
 
             # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
-                    writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
-                    rewards_all[i] = 0
+                    writer.add_scalar("train/rewards", reward[i], global_step)
+                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
+                    reward[i] = 0
 
             for item in info:
                 if "episode" in item:
@@ -663,16 +618,6 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     break
-
-            """ count state visitation frequency """
-            for env_indx, env in enumerate(envs.envs):
-                hash_val = env.hash(hash_size)
-                count_table[hash_val] = count_table.get(hash_val, 0) + 1
-                # save the hash of ae buffer samples
-                hash_vals[buffer_ae_indx, env_indx] = hash_val
-
-            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
-            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -759,46 +704,37 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                # training auto encoder
-                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                           size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-                next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
-                next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-                # flatten
-                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-                # update AE
-                next_latent = encoder(next_state_batch)
-                latent = encoder(ae_batch)
-                reconstruct = decoder(latent)
-                assert encoder.outputs['obs'].shape == reconstruct.shape
-
-                latent_norm = (latent**2).sum(dim=-1).mean()
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
-                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
-                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
-                # adjacent l2 loss
-                adjacent_norm = ((latent-next_latent)**2).sum(dim=-1).mean()
-                adjacent_loss = args.alpha * intrinsic_rw(adjacent_norm)
-                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
-                # aggregate
-                loss = adjacent_loss + reconstruct_loss
-                writer.add_scalar("ae/loss", loss.item(), global_step)
-
-                encoder_optim.zero_grad()
-                decoder_optim.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                encoder_optim.step()
-                decoder_optim.step()
-
-
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
+
+        # training auto encoder
+        current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+        ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                   size=(args.ae_batch_size,))
+        ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+
+        # flatten
+        ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+        # update AE
+        latent = encoder(ae_batch)
+        reconstruct = decoder(latent)
+        assert encoder.outputs['obs'].shape == reconstruct.shape
+        reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+        hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
+        ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
+
+        encoder_optim.zero_grad()
+        decoder_optim.zero_grad()
+        ae_loss.backward()
+        nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+        nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+        encoder_optim.step()
+        decoder_optim.step()
+
+        # ===========
+        # logging
+        # ===========
 
         # for some every step, save the current data for training of AE
         if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
@@ -822,6 +758,11 @@ if __name__ == "__main__":
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
+            # log heatmap distribution
+            writer.add_figure("state_distribution/heatmap",
+                    record_state.get_figure_log_scale(), global_step)
+
+
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -838,30 +779,23 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+        # log AE losses
+        writer.add_scalar("AE/loss", ae_loss.item(), global_step)
+        writer.add_scalar("AE/reconstruction_loss", reconstruct_loss.item(), global_step)
+        writer.add_scalar("AE/hash_sign_loss", hash_sign_loss.item(), global_step)
+
         if time.time() - prev_time > 300:
             print(f'[Step: {global_step}/{args.total_timesteps}]')
             prev_time = time.time()
-            """ visualize the encoding with count values """
-            visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-                writer=writer)
-            visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=200, 
-                sample_each_traj=200, writer=writer)
+    envs.close()
+    writer.close()
 
     torch.save({
         'agent': agent.state_dict(),
-        'encoder': encoder.state_dict(),
-        'decoder': decoder.state_dict(),
+        'encoder': encoder,
+        'decoder': decoder
     }, 'weights.pt')
 
-    """ visualize the encoding with count values """
-    visualize_encodings(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=1000//args.num_envs,
-                writer=writer)
-    visualize_encodings_within_trajectory(buffer_ae, hash_vals, encoder, count_table,
-                global_step, current_ae_buffer_size, device, n_samples=200, 
-                sample_each_traj=200, writer=writer, saveimg=True)
-    
-    envs.close()
-    writer.close()
+    with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
+        np.save(f, record_state.count)
+        np.save(f, record_state.mask)
