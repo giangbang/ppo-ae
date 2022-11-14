@@ -634,29 +634,29 @@ if __name__ == "__main__":
                 if approx_kl > args.target_kl:
                     break
 
-        # training auto encoder
-        current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-        ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                   size=(args.ae_batch_size,))
-        ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+            # training auto encoder
+            current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+            ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                       size=(args.ae_batch_size,))
+            ae_batch = buffer_ae[ae_indx_batch].float().to(device)
 
-        # flatten
-        ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-        # update AE
-        latent = encoder(ae_batch)
-        reconstruct = decoder(latent)
-        assert encoder.outputs['obs'].shape == reconstruct.shape
-        reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-        hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
-        ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
+            # flatten
+            ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+            # update AE
+            latent = encoder(ae_batch)
+            reconstruct = decoder(latent)
+            assert encoder.outputs['obs'].shape == reconstruct.shape
+            reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+            hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
+            ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
 
-        encoder_optim.zero_grad()
-        decoder_optim.zero_grad()
-        ae_loss.backward()
-        nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-        nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-        encoder_optim.step()
-        decoder_optim.step()
+            encoder_optim.zero_grad()
+            decoder_optim.zero_grad()
+            ae_loss.backward()
+            nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+            nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+            encoder_optim.step()
+            decoder_optim.step()
 
         # ===========
         # logging

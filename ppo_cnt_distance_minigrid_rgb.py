@@ -154,6 +154,8 @@ def parse_args():
         help="the target KL divergence threshold")
     parser.add_argument("--save-model-every", type=int, default=200_000,
         help="Save model every env steps")
+    parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="whether to save the final model at the end of the training or not")
 
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
@@ -162,7 +164,7 @@ def parse_args():
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
-    parser.add_argument("--alpha", type=float, default=.1,
+    parser.add_argument("--adjacent_norm_coef", type=float, default=.1,
         help="coefficient for L2 norm of adjacent states")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
         help="buffer size for training ae, recommend less than 200k ")
@@ -255,7 +257,7 @@ class PixelEncoder(nn.Module):
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to []
 
@@ -293,11 +295,11 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
-        
+
         self.outputs['latent'] = h_fc
 
         return h_fc
-        
+
 class PixelDecoder(nn.Module):
     def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
@@ -383,22 +385,22 @@ class Episode:
         self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
         self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
         self.device = device
-        
+
     def add(self, embedding):
         for env_idx, (o, idx) in enumerate(zip(embedding, self.indx)):
             self.obs[idx, env_idx] = o
         self.indx = (self.indx+1)%self.max_len
-        
+
     def reset_at(self, i):
         self.indx[i] = 0
-        
+
     def get_state(self, i):
         return self.obs[:self.indx[i], i]
-        
+
     def get_states(self):
         res = [self.get_state(i) for i in range(len(self.indx))]
         return res
-    
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -491,7 +493,7 @@ if __name__ == "__main__":
     prev_time=time.time()
     prev_global_timestep = 0
     intrinsic_reward_measures = []
-    
+
     """ record states in an episode for each parallel environment """
     episode_record = Episode(envs, embedding_dim=args.ae_dim, device=device)
 
@@ -508,7 +510,7 @@ if __name__ == "__main__":
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
             done_buffer[buffer_ae_indx] = next_done.cpu().reshape(done_buffer[buffer_ae_indx].shape)
-            
+
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
@@ -530,7 +532,7 @@ if __name__ == "__main__":
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-            
+
 
             # intrinsic rewards
             if global_step > args.ae_warmup_steps:
@@ -539,11 +541,11 @@ if __name__ == "__main__":
                     next_embedding = encoder(next_obs)
                     if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
-                    
+
                     """ Update the state recording in an episode """
                     episode_record.add(prev_embedding)
                     embeddings_in_episode = episode_record.get_states()
-                    
+
                     latent_distance = [
                         ((prevs_-next_.unsqueeze(0))**2).sum(dim=-1).mean().item()
                         for prevs_, next_ in zip(embeddings_in_episode, next_embedding)
@@ -676,17 +678,15 @@ if __name__ == "__main__":
 
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
-                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
-                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
+
                 # adjacent l2 loss
                 adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-                adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
-                adjacent_norm = adjacent_norm.mean()
-                adjacent_loss = args.alpha * adjacent_norm
-                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
+                shifted_adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
+                shifted_adjacent_norm = shifted_adjacent_norm.mean()
+                adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
+
                 # aggregate
                 loss = adjacent_loss + reconstruct_loss
-                writer.add_scalar("ae/loss", loss.item(), global_step)
 
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
@@ -695,7 +695,7 @@ if __name__ == "__main__":
                 nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
                 encoder_optim.step()
                 decoder_optim.step()
-                
+
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
@@ -742,6 +742,14 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+        # log some more info from AE
+        writer.add_scalar("AE/adjacent_norm", adjacent_norm.mean().item(), global_step)
+        writer.add_scalar("AE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
+        writer.add_scalar("AE/loss", loss.item(), global_step)
+        writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
+        writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
+
+
         # log intrinsic rewards
         if global_step > args.ae_warmup_steps:
             intrinsic_reward_measures = np.concatenate(intrinsic_reward_measures, axis=0)
@@ -755,8 +763,9 @@ if __name__ == "__main__":
     envs.close()
     writer.close()
 
-    torch.save({
-        'agent': agent.state_dict(),
-        'encoder': encoder.state_dict(),
-        'decoder': decoder.state_dict()
-    }, 'weights.pt')
+    if args.save_final_model:
+        torch.save({
+            'agent': agent.state_dict(),
+            'encoder': encoder.state_dict(),
+            'decoder': decoder.state_dict()
+        }, 'weights.pt')
