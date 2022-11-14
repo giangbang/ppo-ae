@@ -656,7 +656,7 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                    # training auto encoder
+                # training auto encoder
                 current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
                 ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                         size=(args.ae_batch_size,))
@@ -679,8 +679,8 @@ if __name__ == "__main__":
                 writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
                 writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
-                adjacent_norm = torch.norm(latent-next_latent, keepdim=True)
-                adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(1-done_batch)
+                adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
+                adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
                 adjacent_norm = adjacent_norm.mean()
                 adjacent_loss = args.alpha * adjacent_norm
                 writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)

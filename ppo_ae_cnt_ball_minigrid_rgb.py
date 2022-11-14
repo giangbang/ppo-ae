@@ -668,49 +668,49 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
                 
+                # training auto encoder
+                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                           size=(args.ae_batch_size,))
+                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+                next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
+                next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
+                done_batch = done_buffer[ae_indx_batch].to(device)
+                # flatten
+                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+                next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
+                done_batch = done_batch.reshape((-1, 1))
+                # update AE
+                next_latent = encoder(next_state_batch)
+                latent = encoder(ae_batch)
+                reconstruct = decoder(latent)
+                assert encoder.outputs['obs'].shape == reconstruct.shape
+
+                latent_norm = (latent**2).sum(dim=-1).mean()
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
+                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
+                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
+                # adjacent l2 loss
+                adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
+                adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
+                adjacent_norm = adjacent_norm.mean()
+                adjacent_loss = args.alpha * adjacent_norm
+                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
+                # aggregate
+                loss = adjacent_loss + reconstruct_loss
+                writer.add_scalar("ae/loss", loss.item(), global_step)
+
+                encoder_optim.zero_grad()
+                decoder_optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+                encoder_optim.step()
+                decoder_optim.step()
+                
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-                    
-            # training auto encoder
-            current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-            ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                       size=(args.ae_batch_size,))
-            ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-            next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
-            next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-            done_batch = done_buffer[ae_indx_batch].to(device)
-            # flatten
-            ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-            next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-            done_batch = done_batch.reshape((-1, 1))
-            # update AE
-            next_latent = encoder(next_state_batch)
-            latent = encoder(ae_batch)
-            reconstruct = decoder(latent)
-            assert encoder.outputs['obs'].shape == reconstruct.shape
-
-            latent_norm = (latent**2).sum(dim=-1).mean()
-            reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
-            writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
-            writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
-            # adjacent l2 loss
-            adjacent_norm = torch.norm(latent-next_latent, keepdim=True)
-            adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(1-done_batch)
-            adjacent_norm = adjacent_norm.mean()
-            adjacent_loss = args.alpha * adjacent_norm
-            writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
-            # aggregate
-            loss = adjacent_loss + reconstruct_loss
-            writer.add_scalar("ae/loss", loss.item(), global_step)
-
-            encoder_optim.zero_grad()
-            decoder_optim.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-            nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-            encoder_optim.step()
-            decoder_optim.step()
 
         # ===========
         # logging
