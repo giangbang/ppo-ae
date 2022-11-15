@@ -56,7 +56,7 @@ python ppo_ae_joint_minigrid_rgb.py --env-id MiniGrid-SimpleCrossingS9N1-v0 --ex
               --total-timesteps 500_000 --learning-rate 1e-3 --ae-dim 50 \
               --seed 1 --beta 0.0001 --ae-buffer-size 200_000 --save-sample-AE-reconstruction-every 1_000
 ```
-results
-![training losses](/img/loss.png "Training losses")
-![training rewards](/img/reward.png "Training rewards")
-![Legend](/img/legend.png "Legend")
+
+```
+python -m src.ppo_ae_cnt_ball_minigrid_rgb --env-id  MiniGrid-DoorKey-8x8-v0   --total-timesteps 250_000 --learning-rate 3e-4 --ae-dim 100 --seed 0 --ae-batch-size 32 --beta 0.001 --ae-buffer-size 50_000 --save-sample-AE-reconstruction-every 1_000 --adv-rw-coef 1e-4 --adjacent_norm_coef  1e-1 --weight-decay 1e-7 
+```
