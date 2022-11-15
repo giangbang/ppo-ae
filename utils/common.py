@@ -207,7 +207,7 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name):
     return thunk
     
 def make_env(env_id, *args, **kwargs):
-    if "Minigrid" in env_id:
+    if "MiniGrid" in env_id:
         return make_minigrid_rgb_env(env_id, *args, **kwargs)
     else:
         return make_atari_env(env_id, *args, **kwargs)
