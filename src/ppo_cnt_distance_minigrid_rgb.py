@@ -260,21 +260,26 @@ class Agent(nn.Module):
 
 class Episode:
     """ Save the embeddings of all states in a trajectory"""
-    def __init__(self, env, embedding_dim, max_len=1000, device='cpu'):
+    def __init__(self, env, embedding_dim, max_len=500, device='cpu'):
         self.max_len = min(max_len, env.envs[0].max_steps)
         self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
         self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
         self.device = device
+        self.full = torch.zeros_like(self.indx, dtype=torch.bool)
 
     def add(self, embedding):
         for env_idx, (o, idx) in enumerate(zip(embedding, self.indx)):
             self.obs[idx, env_idx] = o
         self.indx = (self.indx+1)%self.max_len
+        for i in range(len(self.indx)):
+            if self.indx[i] == 0: self.full[i] = True
 
     def reset_at(self, i):
         self.indx[i] = 0
+        self.full[i] = False
 
     def get_state(self, i):
+        if self.full[i]: return self.obs[:, i]
         return self.obs[:self.indx[i], i]
 
     def get_states(self):
@@ -626,7 +631,7 @@ if __name__ == "__main__":
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
         # log some more info from AE
-        writer.add_scalar("AE/adjacent_norm", adjacent_norm.mean().item(), global_step)
+        writer.add_scalar("AE/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
         writer.add_scalar("AE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
         writer.add_scalar("AE/loss", loss.item(), global_step)
         writer.add_scalar("AE/reconstruct_loss", reconstruct_loss.item(), global_step)
