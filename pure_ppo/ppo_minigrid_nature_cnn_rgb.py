@@ -21,81 +21,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-def pprint(dict_data):
-    '''Pretty print Hyper-parameters'''
-    hyper_param_space, value_space = 30, 40
-    format_str = "| {:<"+ f"{hyper_param_space}" + "} | {:<"+f"{value_space}"+"}|"
-    hbar = '-'*(hyper_param_space + value_space+6)
+from utils.common import *
 
-    print(hbar)
-    print(format_str.format('Hyperparams', 'Values'))
-    print(hbar)
-
-    for k, v in dict_data.items():
-        print(format_str.format(str(k), str(v)))
-
-    print(hbar)
-
-class CustomFlatObsWrapper(gym.core.ObservationWrapper):
-    '''
-    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
-    Which only considers the case where the observation contains both `image` and `mission`
-    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
-    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
-    '''
-    def __init__(self, env, maxStrLen=96):
-        super().__init__(env)
-
-        self.maxStrLen = maxStrLen
-        self.numCharCodes = 27
-
-        if isinstance(env.observation_space, spaces.Dict):
-            imgSpace = env.observation_space.spaces['image']
-        else:
-            imgSpace = env.observation_space
-        imgSize = reduce(operator.mul, imgSpace.shape, 1)
-
-        self.observation_space = spaces.Box(
-            low=0,
-            high=255,
-            shape=(imgSize + self.numCharCodes * self.maxStrLen,),
-            dtype='uint8'
-        )
-
-        self.cachedStr = None
-        self.cachedArray = None
-
-    def observation(self, obs):
-        if isinstance(obs, dict):
-            return self._observation(obs)
-        return obs.flatten()
-
-
-    def _observation(self, obs):
-        image = obs['image']
-        mission = obs['mission']
-
-        # Cache the last-encoded mission string
-        if mission != self.cachedStr:
-            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
-            mission = mission.lower()
-
-            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
-
-            for idx, ch in enumerate(mission):
-                if ch >= 'a' and ch <= 'z':
-                    chNo = ord(ch) - ord('a')
-                elif ch == ' ':
-                    chNo = ord('z') - ord('a') + 1
-                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
-                strArray[idx, chNo] = 1
-
-            self.cachedStr = mission
-            self.cachedArray = strArray
-
-        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
-
-        return obs
 
 def parse_args():
     # fmt: off
@@ -175,53 +102,6 @@ def parse_args():
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
-
-class TransposeImageWrapper(gym.ObservationWrapper):
-    '''Transpose img dimension before being fed to neural net'''
-    def __init__(self, env, op=[2,0,1]):
-        super().__init__(env)
-        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
-        self.op = op
-        obs_shape = self.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            self.observation_space.low[0, 0, 0],
-            self.observation_space.high[0, 0, 0], [
-                obs_shape[self.op[0]], obs_shape[self.op[1]],
-                obs_shape[self.op[2]]
-            ],
-            dtype=self.observation_space.dtype)
-
-    def observation(self, ob):
-        return ob.transpose(self.op[0], self.op[1], self.op[2])
-
-def make_env(env_id, seed, idx, capture_video, run_name):
-    def thunk():
-        env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
-        env = RGBImgObsWrapper(env)
-        env = ImgObsWrapper(env)
-        env = TransposeImageWrapper(env)
-
-        env.action_space = gym.spaces.Discrete(env.action_space.n)
-        env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int),
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
-        )
-        print("obs shape", np.array(env.reset()[0]).shape)
-
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        if capture_video:
-            if idx == 0:
-                env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        try:
-            env.seed(seed)
-        except:
-            print("cannot seed the environment")
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
-        return env
-
-    return thunk
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):

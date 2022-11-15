@@ -1,5 +1,11 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 
+"""
+Run the algorithm with fourroom environment from minigrid, then plot
+the heatmap distribution of the state visitation frequency of the agent
+for the first several env steps (300_000)
+"""
+
 import argparse
 import os
 import random
@@ -21,81 +27,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-def pprint(dict_data):
-    '''Pretty print Hyper-parameters'''
-    hyper_param_space, value_space = 30, 40
-    format_str = "| {:<"+ f"{hyper_param_space}" + "} | {:<"+f"{value_space}"+"}|"
-    hbar = '-'*(hyper_param_space + value_space+6)
+from utils.common import *
 
-    print(hbar)
-    print(format_str.format('Hyperparams', 'Values'))
-    print(hbar)
-
-    for k, v in dict_data.items():
-        print(format_str.format(str(k), str(v)))
-
-    print(hbar)
-
-class CustomFlatObsWrapper(gym.core.ObservationWrapper):
-    '''
-    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
-    Which only considers the case where the observation contains both `image` and `mission`
-    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
-    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
-    '''
-    def __init__(self, env, maxStrLen=96):
-        super().__init__(env)
-
-        self.maxStrLen = maxStrLen
-        self.numCharCodes = 27
-
-        if isinstance(env.observation_space, spaces.Dict):
-            imgSpace = env.observation_space.spaces['image']
-        else:
-            imgSpace = env.observation_space
-        imgSize = reduce(operator.mul, imgSpace.shape, 1)
-
-        self.observation_space = spaces.Box(
-            low=0,
-            high=255,
-            shape=(imgSize + self.numCharCodes * self.maxStrLen,),
-            dtype='uint8'
-        )
-
-        self.cachedStr = None
-        self.cachedArray = None
-
-    def observation(self, obs):
-        if isinstance(obs, dict):
-            return self._observation(obs)
-        return obs.flatten()
-
-
-    def _observation(self, obs):
-        image = obs['image']
-        mission = obs['mission']
-
-        # Cache the last-encoded mission string
-        if mission != self.cachedStr:
-            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
-            mission = mission.lower()
-
-            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
-
-            for idx, ch in enumerate(mission):
-                if ch >= 'a' and ch <= 'z':
-                    chNo = ord(ch) - ord('a')
-                elif ch == ' ':
-                    chNo = ord('z') - ord('a') + 1
-                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
-                strArray[idx, chNo] = 1
-
-            self.cachedStr = mission
-            self.cachedArray = strArray
-
-        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
-
-        return obs
 
 def parse_args():
     # fmt: off
@@ -118,11 +51,11 @@ def parse_args():
         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Algorithm specific arguments
-    parser.add_argument("--env-id", type=str, default="CartPole-v1",
+    parser.add_argument("--env-id", type=str, default="MiniGrid-FourRooms-v0",
         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=500000,
+    parser.add_argument("--total-timesteps", type=int, default=300000,
         help="total timesteps of the experiments")
-    parser.add_argument("--learning-rate", type=float, default=2.5e-4,
+    parser.add_argument("--learning-rate", type=float, default=3e-4,
         help="the learning rate of the optimizer")
     parser.add_argument("--num-envs", type=int, default=4,
         help="the number of parallel game environments")
@@ -158,11 +91,11 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=128,
+    parser.add_argument("--ae-batch-size", type=int, default=256,
         help="AE batch size")
-    parser.add_argument("--beta", type=float, default=0.001,
+    parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
-    parser.add_argument("--adjacent_norm_coef", type=float, default=.1,
+    parser.add_argument("--alpha", type=float, default=.1,
         help="coefficient for L2 norm of adjacent states")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
         help="buffer size for training ae, recommend less than 200k ")
@@ -170,71 +103,26 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-    parser.add_argument("--weight-decay", type=float, default=1e-7,
+    parser.add_argument("--weight-decay", type=float, default=0.01,
         help="L2 norm of the weight vectors of decoder")
 
-    # intrinsic reward learning parameters
+    # advesatial learning parameters
     parser.add_argument("--adv-rw-coef", type=float, default=0.01,
         help="coefficient for intrinsic reward")
-    parser.add_argument("--ae-warmup-steps", type=int, default=1000,
+    parser.add_argument("--ae-warmup-steps", type=int, default=30_000,
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
-    parser.add_argument("--neighbor-radius", type=float, default=5.,
-        help="count the number of embedding states inside a ball centered at the current state")
 
-
+    # parameters for ploting heatmap
+    parser.add_argument("--upper-limit-count", type=int, default=500,
+        help="The upper limit for plotting the heatmap, higher values count than this will be capped")
 
     args = parser.parse_args()
+    # only work with 1 environment
+    args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
-
-class TransposeImageWrapper(gym.ObservationWrapper):
-    '''Transpose img dimension before being fed to neural net'''
-    def __init__(self, env, op=[2,0,1]):
-        super().__init__(env)
-        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
-        self.op = op
-        obs_shape = self.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            self.observation_space.low[0, 0, 0],
-            self.observation_space.high[0, 0, 0], [
-                obs_shape[self.op[0]], obs_shape[self.op[1]],
-                obs_shape[self.op[2]]
-            ],
-            dtype=self.observation_space.dtype)
-
-    def observation(self, ob):
-        return ob.transpose(self.op[0], self.op[1], self.op[2])
-
-def make_env(env_id, seed, idx, capture_video, run_name):
-    def thunk():
-        env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
-        env = RGBImgObsWrapper(env)
-        env = ImgObsWrapper(env)
-        env = TransposeImageWrapper(env)
-
-        env.action_space = gym.spaces.Discrete(env.action_space.n)
-        env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int),
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
-        )
-        print("obs shape", np.array(env.reset()[0]).shape)
-
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        if capture_video:
-            if idx == 0:
-                env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        try:
-            env.seed(seed)
-        except:
-            print("cannot seed the environment")
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
-        return env
-
-    return thunk
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -246,30 +134,48 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
+def tie_weights(src, trg):
+    assert type(src) == type(trg)
+    trg.weight = src.weight
+    trg.bias = src.bias
 
 OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
         super().__init__()
 
         assert len(obs_shape) == 3
+        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((84, 84)) # Input image is resized to []
+        self.resize = Resize((64, 64)) # Input image is resized to [64x64]
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
         )
         for i in range(num_layers - 1):
-            self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
+            self.convs.append(nn.Conv2d(num_filters, num_filters*2, 3, stride=2))
+            num_filters*=2
 
-        out_dim = OUT_DIM[num_layers]
-        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
+        dummy_input = self.resize(torch.randn((1, ) + obs_shape))
+
+        with torch.no_grad():
+            for conv in self.convs:
+                dummy_input = conv(dummy_input)
+
+        output_size = np.prod(dummy_input.shape)
+        OUT_DIM[num_layers] = dummy_input.shape[1:]
+        self.fc = nn.Sequential(
+            nn.Linear(output_size, output_size),
+            nn.ReLU(),
+            nn.Linear(output_size, self.feature_dim),
+        )
+        # self.fc = nn.Linear(output_size, self.feature_dim)
         # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
@@ -285,7 +191,6 @@ class PixelEncoder(nn.Module):
         for i in range(1, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
-
         h = conv.view(conv.size(0), -1)
         return h
 
@@ -296,32 +201,51 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
+        self.outputs['fc'] = h_fc
 
-        self.outputs['latent'] = h_fc
+        # h_norm = self.ln(h_fc)
+        # self.outputs['ln'] = h_norm
 
-        return h_fc
+        # out = torch.ReLU(h_norm)
+        out = h_fc
+        self.outputs['latent'] = out
+
+        return out
+
+    def copy_conv_weights_from(self, source):
+        """Tie convolutional layers"""
+        # only tie conv layers
+        for i in range(self.num_layers):
+            tie_weights(src=source.convs[i], trg=self.convs[i])
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim=50, num_layers=5, num_filters=8):
         super().__init__()
 
         self.num_layers = num_layers
         self.num_filters = num_filters
-        self.out_dim = OUT_DIM[num_layers]
+        num_filters *= 2**(num_layers-1)
+        self.out_dim = np.prod(OUT_DIM[num_layers])
 
-        self.fc = nn.Linear(
-            feature_dim, num_filters * self.out_dim * self.out_dim
+        self.fc = nn.Sequential(
+            nn.Linear(feature_dim, self.out_dim),
+            nn.ReLU(),
+            nn.Linear(self.out_dim, self.out_dim),
         )
+        # self.fc = nn.Linear(
+            # feature_dim, self.out_dim
+        # )
 
         self.deconvs = nn.ModuleList()
 
         for i in range(self.num_layers - 1):
             self.deconvs.append(
-                nn.ConvTranspose2d(num_filters, num_filters, 3, stride=1)
+                nn.ConvTranspose2d(num_filters, num_filters//2, 3, stride=2)
             )
+            num_filters //= 2
         self.deconvs.append(
             nn.ConvTranspose2d(
-                num_filters, obs_shape[0], 3, stride=2, output_padding=1
+                num_filters, obs_shape[0], 3, stride=2,output_padding=1
             )
         )
 
@@ -331,7 +255,7 @@ class PixelDecoder(nn.Module):
         h = torch.relu(self.fc(h))
         self.outputs['fc'] = h
 
-        deconv = h.view(-1, self.num_filters, self.out_dim, self.out_dim)
+        deconv = h.view(-1, *OUT_DIM[self.num_layers])
         self.outputs['deconv1'] = deconv
 
         for i in range(0, self.num_layers - 1):
@@ -343,7 +267,6 @@ class PixelDecoder(nn.Module):
         self.outputs['obs'] = obs
 
         return obs
-
 
 # ===================================
 
@@ -379,43 +302,8 @@ class Agent(nn.Module):
         if detach_value: x = x.detach()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
 
-class Episode:
-    """ Save the embeddings of all states in a trajectory"""
-    def __init__(self, env, embedding_dim, max_len=1000, device="cpu"):
-        self.max_len = min(max_len, env.envs[0].max_steps)
-        self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
-        self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
-        self.device = device
-
-    def add(self, embedding):
-        for env_idx, (o, idx) in enumerate(zip(embedding, self.indx)):
-            self.obs[idx, env_idx] = o
-        self.indx = (self.indx+1)%self.max_len
-
-    def reset_at(self, i):
-        self.indx[i] = 0
-
-    def get_state(self, i):
-        return self.obs[:self.indx[i], i]
-
-    def get_states(self):
-        res = [self.get_state(i) for i in range(len(self.indx))]
-        return res
-
-    def count_in_ball(self, current_embeddings, eps=5):
-        embeddings_in_episode = self.get_states()
-        latent_distance = [
-            (traj_embeddings-current_embedding.unsqueeze(0)).norm(dim=-1, keepdim=True)
-            for current_embedding, traj_embeddings in zip(current_embeddings, embeddings_in_episode)
-        ]
-
-        inside_balls = [
-            latent_d < eps for latent_d in latent_distance
-        ]
-
-        cnt = [inside_ball.sum().item() for inside_ball in inside_balls]
-        return torch.Tensor(cnt)
-
+def intrinsic_rw(distance):
+    return distance
 
 if __name__ == "__main__":
     args = parse_args()
@@ -459,7 +347,8 @@ if __name__ == "__main__":
     pprint(vars(args))
 
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    envs = [make_env(args.env_id, args.seed + i, i, 
+            args.capture_video, run_name, reseed=True, restrict_action=3) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
@@ -484,7 +373,7 @@ if __name__ == "__main__":
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
                 dtype=torch.uint8)
-    done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
+    # done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
 
@@ -508,9 +397,8 @@ if __name__ == "__main__":
     prev_time=time.time()
     prev_global_timestep = 0
     intrinsic_reward_measures = []
-
-    """ record states in an episode for each parallel environment """
-    episode_record = Episode(envs, embedding_dim=args.ae_dim, device=device)
+    record_state = stateRecording(envs.envs[0])
+    record_state.add_count_from_env(envs.envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -524,8 +412,7 @@ if __name__ == "__main__":
             global_step += 1 * args.num_envs
             obs[step] = next_obs
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
-            done_buffer[buffer_ae_indx] = next_done.cpu().reshape(done_buffer[buffer_ae_indx].shape)
-
+            # done_buffer[buffer_ae_indx] = next_done.cpu()
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
             ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
@@ -542,12 +429,15 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            record_state.add_count_from_env(envs.envs[0])
+
+            """ hide reward from agents """
+            reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-
 
             # intrinsic rewards
             if global_step > args.ae_warmup_steps:
@@ -556,13 +446,9 @@ if __name__ == "__main__":
                     next_embedding = encoder(next_obs)
                     if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
+                    latent_distance = ((prev_embedding-next_embedding)**2).sum(dim=-1)
 
-                    """ Update the state recording in an episode """
-                    episode_record.add(prev_embedding)
-
-                    count_in_ball = episode_record.count_in_ball(next_embedding, eps=args.neighbor_radius)
-                    count_in_ball = count_in_ball.to(device)
-                intrinsic_reward = 1/(count_in_ball+1)
+                intrinsic_reward = intrinsic_rw(latent_distance)
                 intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
@@ -574,7 +460,6 @@ if __name__ == "__main__":
                     writer.add_scalar("train/rewards", rewards_all[i], global_step)
                     writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
                     rewards_all[i] = 0
-                    episode_record.reset_at(i)
 
             for item in info:
                 if "episode" in item:
@@ -675,11 +560,9 @@ if __name__ == "__main__":
                 ae_batch = buffer_ae[ae_indx_batch].float().to(device)
                 next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
                 next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-                done_batch = done_buffer[ae_indx_batch].to(device)
                 # flatten
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-                done_batch = done_batch.reshape((-1, 1))
                 # update AE
                 next_latent = encoder(next_state_batch)
                 latent = encoder(ae_batch)
@@ -688,14 +571,15 @@ if __name__ == "__main__":
 
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
-
+                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
+                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
-                adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-                shifted_adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
-                shifted_adjacent_norm = shifted_adjacent_norm.mean()
-                adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
+                adjacent_norm = ((latent-next_latent)**2).sum(dim=-1).mean()
+                adjacent_loss = args.alpha * intrinsic_rw(adjacent_norm)
+                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
                 # aggregate
                 loss = adjacent_loss + reconstruct_loss
+                writer.add_scalar("ae/loss", loss.item(), global_step)
 
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
@@ -705,13 +589,10 @@ if __name__ == "__main__":
                 encoder_optim.step()
                 decoder_optim.step()
 
+
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-
-        # ===========
-        # logging
-        # ===========
 
         # for some every step, save the current data for training of AE
         if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
@@ -735,6 +616,10 @@ if __name__ == "__main__":
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
+            # log heatmap distribution
+            writer.add_figure("state_distribution/heatmap",
+                    record_state.get_figure(args.upper_limit_count), global_step)
+
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -750,13 +635,6 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-
-        # log some more info from AE
-        writer.add_scalar("AE/adjacent_norm", adjacent_norm.mean().item(), global_step)
-        writer.add_scalar("AE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
-        writer.add_scalar("AE/loss", loss.item(), global_step)
-        writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
-        writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
 
         # log intrinsic rewards
         if global_step > args.ae_warmup_steps:
@@ -776,3 +654,7 @@ if __name__ == "__main__":
         'encoder': encoder.state_dict(),
         'decoder': decoder.state_dict()
     }, 'weights.pt')
+
+    with open(f'visit_freq_{args.total_timesteps}.npy', 'wb') as f:
+        np.save(f, record_state.count)
+        np.save(f, record_state.mask)

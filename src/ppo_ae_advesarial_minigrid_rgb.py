@@ -673,15 +673,15 @@ if __name__ == "__main__":
 
                 latent_norm = (latent**2).sum(dim=-1).mean()
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
-                writer.add_scalar("ae/reconstruct_loss", reconstruct_loss.item(), global_step)
-                writer.add_scalar("ae/latent_norm", latent_norm.item(), global_step)
+                writer.add_scalar("AE/reconstruct_loss", reconstruct_loss.item(), global_step)
+                writer.add_scalar("AE/latent_norm", latent_norm.item(), global_step)
                 # adjacent l2 loss
                 adjacent_norm = ((latent-next_latent)**2).sum(dim=-1).mean()
                 adjacent_loss = args.alpha * intrinsic_rw(adjacent_norm)
-                writer.add_scalar("ae/adjacent_norm", adjacent_norm.item(), global_step)
+                writer.add_scalar("AE/adjacent_norm", adjacent_norm.item(), global_step)
                 # aggregate
                 loss = adjacent_loss + reconstruct_loss
-                writer.add_scalar("ae/loss", loss.item(), global_step)
+                writer.add_scalar("AE/loss", loss.item(), global_step)
 
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
