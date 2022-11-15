@@ -162,7 +162,7 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
         env = TransposeImageWrapper(env)
         if reseed:
             from minigrid.wrappers import ReseedWrapper
-            env = ReseedWrapper(env)
+            env = ReseedWrapper(env, seeds=[seed])
         if restrict_action is not None:
             env = MovementActionWrapper(env, max_action=restrict_action)
 

@@ -85,7 +85,7 @@ def parse_args():
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
+    parser.add_argument("--ae-batch-size", type=int, default=32,
         help="AE batch size")
     parser.add_argument("--beta", type=float, default=0.0001,
         help="L2 norm of the latent vectors")
