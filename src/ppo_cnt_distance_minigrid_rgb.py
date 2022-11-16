@@ -102,11 +102,13 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=1e-7,
         help="L2 norm of the weight vectors of decoder")
 
-    # advesatial learning parameters
-    parser.add_argument("--adv-rw-coef", type=float, default=0.01,
+    # intrinsic learning parameters
+    parser.add_argument("--rw-coef", type=float, default=0.1,
         help="coefficient for intrinsic reward")
     parser.add_argument("--ae-warmup-steps", type=int, default=1000,
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
+    parser.add_argument("--distance-clip", type=float, default=0.1,
+        help="cliping distance theshold in objective")
 
 
     args = parser.parse_args()
@@ -139,7 +141,7 @@ class PixelEncoder(nn.Module):
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((84, 84)) # Input image is resized to []
+        self.resize = Resize((84, 84), interpolation=0) # Input image is resized to []
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
@@ -569,7 +571,7 @@ if __name__ == "__main__":
 
                 # adjacent l2 loss
                 adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-                shifted_adjacent_norm = (adjacent_norm-1).clip(min=0).square()*(~done_batch)
+                shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
                 shifted_adjacent_norm = shifted_adjacent_norm.mean()
                 adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
 
