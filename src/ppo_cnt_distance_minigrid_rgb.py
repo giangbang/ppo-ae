@@ -110,8 +110,17 @@ def parse_args():
     parser.add_argument("--distance-clip", type=float, default=0.1,
         help="cliping distance theshold in objective")
 
+    # visualization of the state distribution
+    parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Visualize state distribution by heatmaps.")
+    parser.add_argument("--whiten-rewards", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Hide rewards signal from agent.")
+
 
     args = parser.parse_args()
+    if args.visualize_states:
+        # only work with 1 environment
+        args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
@@ -385,6 +394,10 @@ if __name__ == "__main__":
 
     """ record states in an episode for each parallel environment """
     episode_record = Episode(envs, embedding_dim=args.ae_dim, device=device)
+    
+    """ For visualization """
+    record_state = stateRecording(envs.envs[0])
+    record_state.add_count_from_env(envs.envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -417,6 +430,12 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
 
+            if args.visualize_states:
+                record_state.add_count_from_env(envs.envs[0])
+                if args.whiten_rewards:
+                    """ hide reward from agents """
+                    reward = np.zeros_like(reward)
+
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -442,7 +461,7 @@ if __name__ == "__main__":
                     latent_distance = torch.Tensor(latent_distance).to(device)
 
                 intrinsic_reward = latent_distance
-                intrinsic_reward = args.adv_rw_coef * intrinsic_reward.view(rewards[step].shape)
+                intrinsic_reward = args.rw_coef * intrinsic_reward.view(rewards[step].shape)
                 rewards[step] += intrinsic_reward
 
                 intrinsic_reward_measures.append(intrinsic_reward.cpu())
@@ -616,6 +635,11 @@ if __name__ == "__main__":
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
+            if args.visualize_states:
+                # log heatmap distribution
+                writer.add_figure("state_distribution/heatmap",
+                        record_state.get_figure_log_scale(), global_step)
+
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -648,8 +672,8 @@ if __name__ == "__main__":
             intrinsic_reward_measures = []
             
             latent_distance_measures = torch.cat(latent_distance_measures, dim=0)
-            writer.add_scalar("AE/average_latent_distance", latent_distance_measures.mean(), global_step)
-            writer.add_scalar("AE/max_latent_distance", latent_distance_measures.max(), global_step)
+            writer.add_scalar("rewards/average_latent_distance", latent_distance_measures.mean(), global_step)
+            writer.add_scalar("rewards/max_latent_distance", latent_distance_measures.max(), global_step)
             latent_distance_measures = []
 
         if time.time() - prev_time > 300:
@@ -664,3 +688,5 @@ if __name__ == "__main__":
             'encoder': encoder.state_dict(),
             'decoder': decoder.state_dict()
         }, 'weights.pt')
+    if args.visualize_states:
+        record_state.save_to("state_heatmap.npy")
