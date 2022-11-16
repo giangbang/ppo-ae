@@ -115,6 +115,9 @@ def parse_args():
         help="Visualize state distribution by heatmaps.")
     parser.add_argument("--whiten-rewards", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Hide rewards signal from agent.")
+    parser.add_argument("--fixed-seed", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Fixed seed when reset env.")
+    
 
 
     args = parser.parse_args()
@@ -340,7 +343,8 @@ if __name__ == "__main__":
     pprint(vars(args))
 
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, 
+            run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
