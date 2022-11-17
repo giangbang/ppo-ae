@@ -109,6 +109,9 @@ def parse_args():
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
     parser.add_argument("--distance-clip", type=float, default=0.1,
         help="cliping distance theshold in objective")
+    parser.add_argument("--window-size-episode", type=int, default=300,
+        help="The size of window on which the distance is calculated")
+    
 
     # visualization of the state distribution
     parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
@@ -397,7 +400,8 @@ if __name__ == "__main__":
     latent_distance_measures = []
 
     """ record states in an episode for each parallel environment """
-    episode_record = Episode(envs, embedding_dim=args.ae_dim, device=device)
+    episode_record = Episode(envs, embedding_dim=args.ae_dim, 
+                        max_len=args.window_size_episode, device=device)
     
     """ For visualization """
     record_state = stateRecording(envs.envs[0])
