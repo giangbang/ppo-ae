@@ -689,12 +689,17 @@ if __name__ == "__main__":
             prev_time = time.time()
     envs.close()
     writer.close()
+    
+    # saving
+    from datetime import datetime
+    signature = datetime.now().strftime('%Y-%m-%d_%H%M%S')
 
     if args.save_final_model:
         torch.save({
             'agent': agent.state_dict(),
             'encoder': encoder.state_dict(),
             'decoder': decoder.state_dict()
-        }, 'weights.pt')
+        }, f'weights_{signature}.pt')
+
     if args.visualize_states:
-        record_state.save_to("state_heatmap.npy")
+        record_state.save_to(f"state_heatmap_{signature}.npy")

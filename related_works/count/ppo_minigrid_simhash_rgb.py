@@ -21,7 +21,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from simhash import HashingBonusEvaluator
+from .simhash import HashingBonusEvaluator
 from utils.common import *
 
 def parse_args():
@@ -109,9 +109,20 @@ def parse_args():
         help="Warmup phase for VAE, states visited in these first warmup steps are not counted for UCB")
     parser.add_argument("--save-count-histogram-every", type=int, default=5_000,
         help="Interval to save the histogram of the count table")
+        
+    # visualization of the state distribution
+    parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Visualize state distribution by heatmaps.")
+    parser.add_argument("--whiten-rewards", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Hide rewards signal from agent.")
+    parser.add_argument("--fixed-seed", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Fixed seed when reset env.")
 
 
     args = parser.parse_args()
+    if args.visualize_states:
+        # only work with 1 environment
+        args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
@@ -300,7 +311,8 @@ if __name__ == "__main__":
     pprint(vars(args))
 
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, 
+            run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
@@ -354,7 +366,12 @@ if __name__ == "__main__":
     prev_time=time.time()
     prev_global_timestep = 0
 
+    """ Hasing using simhash """
     hash_bonus = HashingBonusEvaluator(dim_key=args.hash_bit, obs_processed_flat_dim=ae_dim)
+    
+    """ For visualization """
+    record_state = stateRecording(envs.envs[0])
+    record_state.add_count_from_env(envs.envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -385,6 +402,12 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            
+            if args.visualize_states:
+                record_state.add_count_from_env(envs.envs[0])
+                if args.whiten_rewards:
+                    """ hide reward from agents """
+                    reward = np.zeros_like(reward)
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
@@ -506,34 +529,37 @@ if __name__ == "__main__":
                 nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
                 optimizer.step()
                 encoder_optim.step()
+                
+                # ================
+                
+                # training auto encoder
+                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                           size=(args.ae_batch_size,))
+                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+
+                # flatten
+                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+                # update AE
+                latent = encoder(ae_batch)
+                reconstruct = decoder(latent)
+                assert encoder.outputs['obs'].shape == reconstruct.shape
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+                hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
+                ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
+
+                encoder_optim.zero_grad()
+                decoder_optim.zero_grad()
+                ae_loss.backward()
+                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+                encoder_optim.step()
+                decoder_optim.step()
+
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
-
-            # training auto encoder
-            current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-            ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                       size=(args.ae_batch_size,))
-            ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-
-            # flatten
-            ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-            # update AE
-            latent = encoder(ae_batch)
-            reconstruct = decoder(latent)
-            assert encoder.outputs['obs'].shape == reconstruct.shape
-            reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-            hash_sign_loss = torch.min(latent.square(), (1-latent).square()).mean()
-            ae_loss = reconstruct_loss - args.lamda*hash_sign_loss
-
-            encoder_optim.zero_grad()
-            decoder_optim.zero_grad()
-            ae_loss.backward()
-            nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-            nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-            encoder_optim.step()
-            decoder_optim.step()
 
         # ===========
         # logging
@@ -560,6 +586,11 @@ if __name__ == "__main__":
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
             writer.add_image('image/AE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
+            
+            if args.visualize_states:
+                # log heatmap distribution
+                writer.add_figure("state_distribution/heatmap",
+                        record_state.get_figure_log_scale(), global_step)
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
@@ -588,8 +619,15 @@ if __name__ == "__main__":
     envs.close()
     writer.close()
 
+    # saving
+    from datetime import datetime
+    signature = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    
     torch.save({
         'agent': agent.state_dict(),
         'encoder': encoder,
         'decoder': decoder
-    }, 'weights.pt')
+    }, f'weights_{signature}.pt')
+    
+    if args.visualize_states:
+        record_state.save_to(f"state_heatmap_{signature}.npy")
