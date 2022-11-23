@@ -24,6 +24,13 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.common import *
 
 
+reduce = {
+    "mean": lambda x: x.mean(),
+    "last": lambda x: x[-1],
+    "first": lambda x: x[0],
+    "random": lambda x: x[torch.randint(high=len(x), size=(1,))],
+}
+
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
@@ -111,7 +118,8 @@ def parse_args():
         help="cliping distance theshold in objective")
     parser.add_argument("--window-size-episode", type=int, default=300,
         help="The size of window on which the distance is calculated")
-    
+    parser.add_argument("--reduce", type=str, default="mean",
+        help="methods to calculate the intrinsic reward, ")
 
     # visualization of the state distribution
     parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
@@ -345,7 +353,7 @@ if __name__ == "__main__":
     pprint(vars(args))
 
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, 
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video,
             run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
@@ -394,18 +402,21 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
-    
+
     intrinsic_reward_measures = []
     latent_distance_measures = []
 
     """ record states in an episode for each parallel environment """
-    episode_record = Episode(envs, embedding_dim=args.ae_dim, 
+    episode_record = Episode(envs, embedding_dim=args.ae_dim,
                         max_len=args.window_size_episode, device=device)
-    
+
     """ For visualization """
     if args.visualize_states:
         record_state = stateRecording(envs.envs[0])
         record_state.add_count_from_env(envs.envs[0])
+
+    """ method for calculating Intrinsic reward """
+    intrinsic_rw_fnc = reduce[args.reduce]
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
@@ -463,7 +474,10 @@ if __name__ == "__main__":
                     embeddings_in_episode = episode_record.get_states()
 
                     latent_distance = [
-                        ((prevs_-next_.unsqueeze(0))**2).sum(dim=-1).mean().item()
+                        intrinsic_rw_fnc(
+                            ((prevs_-next_.unsqueeze(0))**2).sum(dim=-1)
+                        )
+                        .item()
                         for prevs_, next_ in zip(embeddings_in_episode, next_embedding)
                     ]
                     latent_distance = torch.Tensor(latent_distance).to(device)
@@ -678,7 +692,7 @@ if __name__ == "__main__":
             writer.add_scalar("rewards/average_intrinsic_rewards", intrinsic_reward_measures.mean(), global_step)
             writer.add_scalar("rewards/max_intrinsic_rewards", intrinsic_reward_measures.max(), global_step)
             intrinsic_reward_measures = []
-            
+
             latent_distance_measures = torch.cat(latent_distance_measures, dim=0)
             writer.add_scalar("rewards/average_latent_distance", latent_distance_measures.mean(), global_step)
             writer.add_scalar("rewards/max_latent_distance", latent_distance_measures.max(), global_step)
@@ -689,7 +703,7 @@ if __name__ == "__main__":
             prev_time = time.time()
     envs.close()
     writer.close()
-    
+
     # saving
     from datetime import datetime
     signature = datetime.now().strftime('%Y-%m-%d_%H%M%S')
