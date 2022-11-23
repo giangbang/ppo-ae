@@ -438,12 +438,12 @@ if __name__ == "__main__":
                     writer.add_scalar("train/success", reward[i] > 0.1, global_step)
                     reward[i] = 0
 
-            for item in info:
-                if "episode" in item:
-                    print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
-                    writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
-                    writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
-                    break
+            # for item in info:
+                # if "episode" in item:
+                    # print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
+                    # writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
+                    # writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
+                    # break
 
         # bootstrap value if not done
         with torch.no_grad():
