@@ -219,6 +219,7 @@ class stateRecording:
     def __init__(self, env):
         self.shape = env.grid.height, env.grid.width
         self.count = np.zeros(self.shape, dtype=np.int32)
+        self.rewards = np.zeros(self.shape, dtype=float)
         self.extract_mask(env)
 
     def add_count(self, w, h):
@@ -226,6 +227,12 @@ class stateRecording:
 
     def add_count_from_env(self, env):
         self.add_count(*env.agent_pos)
+        
+    def add_reward(self, w, h, r):
+        self.rewards[h, w] += r
+    
+    def add_reward_from_env(self, env, reward):
+        self.add_reward(*env.agent_pos, reward)
         
     def get_figure_log_scale(self, cap_threshold_cnt=10_000):
         """ plot heat map visitation, similar to `get_figure` but on log scale"""

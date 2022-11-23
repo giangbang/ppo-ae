@@ -314,7 +314,7 @@ if __name__ == "__main__":
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     print(agent)
-    encoder = PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
+    encoder = PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device)
         
     print(encoder)
 
@@ -464,7 +464,7 @@ if __name__ == "__main__":
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
-                next_mb_inds = np.clip(mb_inds + args.num_envs, a_max=len(b_obs)-1)
+                next_mb_inds = np.clip(mb_inds + args.num_envs, a_min=0, a_max=len(b_obs)-1)
                 
                 """ calculate latent states """
                 latent_states = encoder(b_obs[mb_inds])
@@ -515,7 +515,7 @@ if __name__ == "__main__":
                 
                 # find adjacent loss                
                 adjacent_norm = torch.norm(latent_states-next_latent_states, keepdim=True, dim=-1)
-                shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_now)
+                shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(1-done_now)
                 shifted_adjacent_norm = shifted_adjacent_norm.mean()
                 adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
                 
@@ -571,8 +571,6 @@ if __name__ == "__main__":
         # log some more info from AE
         writer.add_scalar("latent/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
         writer.add_scalar("latent/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
-        writer.add_scalar("latent/latent_norm", latent_norm.item(), global_step)
-
 
         # log intrinsic rewards
         if global_step > args.ae_warmup_steps:

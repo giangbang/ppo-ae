@@ -120,7 +120,6 @@ def parse_args():
         help="Hide rewards signal from agent.")
     parser.add_argument("--fixed-seed", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Fixed seed when reset env.")
-    
 
 
     args = parser.parse_args()
