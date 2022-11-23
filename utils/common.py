@@ -189,7 +189,7 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
 
     return thunk
     
-def make_atari_env(env_id, seed, idx, capture_video, run_name):
+def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
     def thunk():
         env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)

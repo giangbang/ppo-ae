@@ -278,7 +278,7 @@ class Agent(nn.Module):
 class Episode:
     """ Save the embeddings of all states in a trajectory"""
     def __init__(self, env, embedding_dim, max_len=500, device='cpu'):
-        self.max_len = min(max_len, env.envs[0].max_steps)
+        self.max_len = max_len
         self.obs = torch.zeros((self.max_len, env.num_envs, embedding_dim)).to(device)
         self.indx = torch.zeros((env.num_envs,), dtype=torch.long)
         self.device = device
@@ -404,8 +404,9 @@ if __name__ == "__main__":
                         max_len=args.window_size_episode, device=device)
     
     """ For visualization """
-    record_state = stateRecording(envs.envs[0])
-    record_state.add_count_from_env(envs.envs[0])
+    if args.visualize_states:
+        record_state = stateRecording(envs.envs[0])
+        record_state.add_count_from_env(envs.envs[0])
 
     # actual training with PPO
     for update in range(1, num_updates + 1):
