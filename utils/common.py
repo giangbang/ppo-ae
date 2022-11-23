@@ -157,8 +157,10 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
     def thunk():
         env = gymnasium.make(env_id)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
+        from gym.wrappers import ResizeObservation
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
+        env = ResizeObservation(env, 84)
         env = TransposeImageWrapper(env)
         if reseed:
             from minigrid.wrappers import ReseedWrapper
