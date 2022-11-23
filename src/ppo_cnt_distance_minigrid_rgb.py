@@ -99,7 +99,7 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-    parser.add_argument("--weight-decay", type=float, default=None,
+    parser.add_argument("--weight-decay", type=float, default=0.0,
         help="L2 norm of the weight vectors of decoder")
 
     # intrinsic learning parameters

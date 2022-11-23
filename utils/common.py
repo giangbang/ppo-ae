@@ -160,8 +160,6 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
         from gym.wrappers import ResizeObservation
         env = RGBImgObsWrapper(env)
         env = ImgObsWrapper(env)
-        env = ResizeObservation(env, 84)
-        env = TransposeImageWrapper(env)
         if reseed:
             from minigrid.wrappers import ReseedWrapper
             env = ReseedWrapper(env, seeds=[seed])
@@ -173,6 +171,8 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
             low=np.zeros(shape=env.observation_space.shape,dtype=int),
             high=np.ones(shape=env.observation_space.shape,dtype=int)*255
         )
+        env = ResizeObservation(env, 84)
+        env = TransposeImageWrapper(env)
         print("obs shape", np.array(env.reset()[0]).shape)
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
