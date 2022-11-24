@@ -226,6 +226,10 @@ if __name__ == "__main__":
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
+    # log command to run this file
+    import sys
+    cmd = " ".join(sys.argv)
+    writer.add_text("terminal", cmd)
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
