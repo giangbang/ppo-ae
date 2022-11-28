@@ -111,8 +111,6 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-    parser.add_argument("--weight-decay", type=float, default=0.0,
-        help="L2 norm of the weight vectors of decoder")
     parser.add_argument("--deterministic-latent", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Deterministically sample from WAE when inference")
 
@@ -430,8 +428,7 @@ if __name__ == "__main__":
     print(decoder)
 
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
-    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate,
-                        eps=1e-5, weight_decay=args.weight_decay)
+    decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
     args.ae_buffer_size = args.ae_buffer_size//args.num_envs
 
