@@ -94,14 +94,16 @@ def parse_args():
     parser.add_argument("--reward-scale", type=float, default=2,
             help="scaling factor for extrinsic rewards")
 
-    # Variational auto encoder parameters
+    # Wasserstein auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
     parser.add_argument("--ae-batch-size", type=int, default=32,
         help="AE batch size")
-    parser.add_argument("--beta", type=float, default=0.0001,
-        help="KL coefficient in VAE")
-    parser.add_argument("--adjacent_norm_coef", type=float, default=.1,
+    parser.add_argument("--beta", type=float, default=1e-5,
+        help="KL coefficient in WAE")
+    parser.add_argument("--beta-mmd", type=float, default=10,
+        help="MMD coefficient in WAE")
+    parser.add_argument("--adjacent_norm_coef", type=float, default=.5,
         help="coefficient for L2 norm of adjacent states")
     parser.add_argument("--ae-buffer-size", type=int, default=100_000,
         help="buffer size for training ae, recommend less than 200k ")
@@ -112,14 +114,15 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=0.0,
         help="L2 norm of the weight vectors of decoder")
     parser.add_argument("--deterministic-latent", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
-        help="Deterministically sample from VAE when inference")
+        help="Deterministically sample from WAE when inference")
+
 
 
     # intrinsic learning parameters
     parser.add_argument("--rw-coef", type=float, default=0.1,
         help="coefficient for intrinsic reward")
     parser.add_argument("--ae-warmup-steps", type=int, default=1000,
-        help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
+        help="Warmup phase for WAE, intrinsic rewards are not consider in this period")
     parser.add_argument("--distance-clip", type=float, default=0.1,
         help="cliping distance theshold in objective")
     parser.add_argument("--window-size-episode", type=int, default=300,
@@ -329,6 +332,37 @@ class Episode:
         res = [self.get_state(i) for i in range(len(self.indx))]
         return res
 
+# https://github.com/HareeshBahuleyan/probabilistic_nlg/blob/master/dialog/wed-stochastic/stochastic_wed.py
+def mmd_penalty(sample_qz, sample_pz):
+    assert sample_qz.shape == sample_pz.shape
+    half_size = (n * n - n) / 2
+    latent_dim = sample_pz.shape[1]
+
+    norms_pz = torch.sum(torch.square(sample_pz), dim=1, keep_dim=True)
+    dotprods_pz = torch.matmul(sample_pz, sample_pz.T)
+    distances_pz = norms_pz + norms_pz.T - 2. * dotprods_pz
+
+    norms_qz = torch.sum(torch.square(sample_qz), dim=1, keep_dim=True)
+    dotprods_qz = torch.matmul(sample_qz, sample_qz.T)
+    distances_qz = norms_qz + norms_qz.T - 2. * dotprods_qz
+
+    dotprods = torch.matmul(sample_qz, sample_pz.T)
+    distances = norms_qz + norms_pz.T - 2. * dotprods
+
+    # inverse multiquadratics kernel
+    Cbase = 2. * latent_dim * 2. * 1. # sigma2_p # for normal sigma2_p = 1
+    stat = 0.
+    for scale in [.1, .2, .5, 1., 2., 5., 10.]:
+        C = Cbase * scale
+        res1 = C / (C + distances_qz)
+        res1 += C / (C + distances_pz)
+        res1 = torch.multiply(res1, 1. - torch.eye(n))
+        res1 = torch.sum(res1) / (n * n - n)
+        res2 = C / (C + distances)
+        res2 = torch.sum(res2) * 2. / (n * n)
+        stat += res1 - res2
+    return stat
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -463,7 +497,7 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                # encode the observation with VAE
+                # encode the observation with WAE
                 next_embedding = encoder.sample(next_obs, deterministic=args.deterministic_latent)[0]
                 action, logprob, _, value = agent.get_action_and_value(next_embedding)
                 values[step] = value.flatten()
@@ -613,7 +647,7 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                # training variational auto encoder
+                # training wasserstein auto encoder
                 current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
                 ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                         size=(args.ae_batch_size,))
@@ -625,14 +659,20 @@ if __name__ == "__main__":
                 ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
                 next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
                 done_batch = done_batch.reshape((-1, 1))
-                # update VAE
+
+                # update WAE
                 next_latent = encoder.sample(next_state_batch)[0]
                 latent, mu, log_var = encoder.sample(ae_batch)
                 reconstruct = decoder(latent)
 
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-                kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+                # reconstruction loss
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+                # mmd loss
+                z_prior = torch.randn_like(log_var) # gaussian N(0, I)
+                mmd = mmd_penalty(z_prior, latent)
+                # kl losses,
+                kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - log_var.exp(), dim = 1), dim = 0)
 
                 # adjacent l2 loss
                 adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
@@ -641,7 +681,7 @@ if __name__ == "__main__":
                 adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
 
                 # aggregate
-                loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
+                loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss + args.beta_mmd * mmd
 
                 encoder_optim.zero_grad()
                 decoder_optim.zero_grad()
@@ -661,7 +701,7 @@ if __name__ == "__main__":
 
         # for some every step, save the current data for training of AE
         if args.save_ae_training_data_freq > 0 and (global_step//args.num_envs) % (args.save_ae_training_data_freq//args.num_envs) == 0:
-            os.makedirs("vae_data", exist_ok=True)
+            os.makedirs("WAE_data", exist_ok=True)
             file_path = os.path.join("ae_data", f"step_{global_step}.pt")
             torch.save(buffer_ae[:current_ae_buffer_size], file_path)
 
@@ -676,9 +716,9 @@ if __name__ == "__main__":
             ae_target = (ae_target*128 + 128).clip(0, 255).cpu()
 
             # log
-            writer.add_image('image/VAE reconstruction', save_reconstruction.type(torch.uint8), global_step)
+            writer.add_image('image/WAE reconstruction', save_reconstruction.type(torch.uint8), global_step)
             writer.add_image('image/original', ae_batch[0].cpu().type(torch.uint8), global_step)
-            writer.add_image('image/VAE target', ae_target.type(torch.uint8), global_step)
+            writer.add_image('image/WAE target', ae_target.type(torch.uint8), global_step)
             prev_global_timestep = global_step
 
             if args.visualize_states:
@@ -702,11 +742,13 @@ if __name__ == "__main__":
         # print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
-        # log some more info from VAE
-        writer.add_scalar("VAE/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
-        writer.add_scalar("VAE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
-        writer.add_scalar("VAE/loss", loss.item(), global_step)
-        writer.add_scalar("VAE/reconstruct_loss", reconstruct_loss.item(), global_step)
+        # log some more info from WAE
+        writer.add_scalar("WAE/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
+        writer.add_scalar("WAE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
+        writer.add_scalar("WAE/loss", loss.item(), global_step)
+        writer.add_scalar("WAE/reconstruct_loss", reconstruct_loss.item(), global_step)
+        writer.add_scalar("WAE/kl_loss", kl_loss.item(), global_step)
+        writer.add_scalar("WAE/mmd", mmd.item(), global_step)
 
 
         # log intrinsic rewards
