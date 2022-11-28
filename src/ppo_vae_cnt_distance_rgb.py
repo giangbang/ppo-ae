@@ -531,7 +531,7 @@ if __name__ == "__main__":
         # bootstrap value if not done
         with torch.no_grad():
             # encode the observation with AE
-            next_embedding = encoder.sample(next_obs, , deterministic=args.deterministic_latent)[0]
+            next_embedding = encoder.sample(next_obs, deterministic=args.deterministic_latent)[0]
             next_value = agent.get_value(next_embedding).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
