@@ -91,8 +91,10 @@ def parse_args():
         help="Save model every env steps")
     parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="whether to save the final model at the end of the training or not")
+    parser.add_argument("--reward-scale", type=float, default=2,
+            help="scaling factor for extrinsic rewards")
 
-    # auto encoder parameters
+    # Variational auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
     parser.add_argument("--ae-batch-size", type=int, default=32,
@@ -109,6 +111,9 @@ def parse_args():
         help="Save sample reconstruction from AE every env steps")
     parser.add_argument("--weight-decay", type=float, default=0.0,
         help="L2 norm of the weight vectors of decoder")
+    parser.add_argument("--deterministic-latent", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Deterministically sample from VAE when inference")
+
 
     # intrinsic learning parameters
     parser.add_argument("--rw-coef", type=float, default=0.1,
@@ -213,8 +218,9 @@ class PixelEncoder(nn.Module):
 
         return self.fc_mu(h_fc), self.fc_var(h_fc)
         
-    def sample(self, obs):
+    def sample(self, obs, deterministic=False):
         mu, logvar = self(obs)
+        if deterministic: return mu, mu, logvar
         return self.reparameterize(mu, logvar), mu, logvar
 
 class PixelDecoder(nn.Module):
@@ -458,7 +464,7 @@ if __name__ == "__main__":
             # ALGO LOGIC: action logic
             with torch.no_grad():
                 # encode the observation with VAE
-                next_embedding = encoder.sample(next_obs)[0]
+                next_embedding = encoder.sample(next_obs, deterministic=args.deterministic_latent)[0]
                 action, logprob, _, value = agent.get_action_and_value(next_embedding)
                 values[step] = value.flatten()
             actions[step] = action
@@ -475,7 +481,7 @@ if __name__ == "__main__":
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
 
@@ -483,7 +489,7 @@ if __name__ == "__main__":
             if global_step > args.ae_warmup_steps:
                 with torch.no_grad():
                     prev_embedding = next_embedding
-                    next_embedding = encoder.sample(next_obs)[0]
+                    next_embedding = encoder.sample(next_obs, deterministic=args.deterministic_latent)[0]
                     if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
 
@@ -525,7 +531,7 @@ if __name__ == "__main__":
         # bootstrap value if not done
         with torch.no_grad():
             # encode the observation with AE
-            next_embedding = encoder.sample(next_obs)[0]
+            next_embedding = encoder.sample(next_obs, , deterministic=args.deterministic_latent)[0]
             next_value = agent.get_value(next_embedding).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
@@ -558,7 +564,7 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
-                    encoder.sample(b_obs[mb_inds])[0], b_actions.long()[mb_inds],
+                    encoder.sample(b_obs[mb_inds], deterministic=args.deterministic_latent)[0], b_actions.long()[mb_inds],
                     # detach value and policy go here
                     detach_value=False, detach_policy=True,
                 )
@@ -623,8 +629,8 @@ if __name__ == "__main__":
                 next_latent = encoder.sample(next_state_batch)[0]
                 latent, mu, log_var = encoder.sample(ae_batch)
                 reconstruct = decoder(latent)
+    
                 assert encoder.outputs['obs'].shape == reconstruct.shape
-
                 kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) 
 
