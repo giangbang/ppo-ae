@@ -215,7 +215,7 @@ class PixelEncoder(nn.Module):
         
     def sample(self, obs):
         mu, logvar = self(obs)
-        return self.reparameterize(mu, logstd), mu, logvar
+        return self.reparameterize(mu, logvar), mu, logvar
 
 class PixelDecoder(nn.Module):
     def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
@@ -483,7 +483,7 @@ if __name__ == "__main__":
             if global_step > args.ae_warmup_steps:
                 with torch.no_grad():
                     prev_embedding = next_embedding
-                    next_embedding = encoder.sample(next_obs)
+                    next_embedding = encoder.sample(next_obs)[0]
                     if len(prev_embedding.shape) == 1: prev_embedding.unsqueeze(0)
                     if len(next_embedding.shape) == 1: next_embedding.unsqueeze(0)
 
@@ -525,7 +525,7 @@ if __name__ == "__main__":
         # bootstrap value if not done
         with torch.no_grad():
             # encode the observation with AE
-            next_embedding = encoder.sample(next_obs)
+            next_embedding = encoder.sample(next_obs)[0]
             next_value = agent.get_value(next_embedding).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
@@ -626,7 +626,7 @@ if __name__ == "__main__":
                 assert encoder.outputs['obs'].shape == reconstruct.shape
 
                 kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * latent_norm
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) 
 
                 # adjacent l2 loss
                 adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
