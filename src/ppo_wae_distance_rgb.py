@@ -331,16 +331,17 @@ class Episode:
         return res
 
 # https://github.com/HareeshBahuleyan/probabilistic_nlg/blob/master/dialog/wed-stochastic/stochastic_wed.py
-def mmd_penalty(sample_qz, sample_pz):
+def mmd_penalty(sample_qz, sample_pz, device='cpu'):
     assert sample_qz.shape == sample_pz.shape
+    n = sample_qz.shape[0]
     half_size = (n * n - n) / 2
     latent_dim = sample_pz.shape[1]
 
-    norms_pz = torch.sum(torch.square(sample_pz), dim=1, keep_dim=True)
+    norms_pz = torch.sum(torch.square(sample_pz), dim=1, keepdim=True)
     dotprods_pz = torch.matmul(sample_pz, sample_pz.T)
     distances_pz = norms_pz + norms_pz.T - 2. * dotprods_pz
 
-    norms_qz = torch.sum(torch.square(sample_qz), dim=1, keep_dim=True)
+    norms_qz = torch.sum(torch.square(sample_qz), dim=1, keepdim=True)
     dotprods_qz = torch.matmul(sample_qz, sample_qz.T)
     distances_qz = norms_qz + norms_qz.T - 2. * dotprods_qz
 
@@ -354,7 +355,7 @@ def mmd_penalty(sample_qz, sample_pz):
         C = Cbase * scale
         res1 = C / (C + distances_qz)
         res1 += C / (C + distances_pz)
-        res1 = torch.multiply(res1, 1. - torch.eye(n))
+        res1 = torch.multiply(res1, 1. - torch.eye(n, device=device))
         res1 = torch.sum(res1) / (n * n - n)
         res2 = C / (C + distances)
         res2 = torch.sum(res2) * 2. / (n * n)
@@ -667,7 +668,7 @@ if __name__ == "__main__":
                 reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
                 # mmd loss
                 z_prior = torch.randn_like(log_var) # gaussian N(0, I)
-                mmd = mmd_penalty(z_prior, latent)
+                mmd = mmd_penalty(z_prior, latent, device=device)
                 # kl losses,
                 kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - log_var.exp(), dim = 1), dim = 0)
 
