@@ -91,6 +91,8 @@ def parse_args():
         help="Save model every env steps")
     parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="whether to save the final model at the end of the training or not")
+    parser.add_argument("--reward-scale", type=float, default=10,
+            help="scaling factor for extrinsic rewards")
 
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
@@ -332,7 +334,7 @@ if __name__ == "__main__":
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
-    
+
     # log command to run this file
     import sys
     cmd = " ".join(sys.argv)
@@ -463,7 +465,7 @@ if __name__ == "__main__":
 
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
 
