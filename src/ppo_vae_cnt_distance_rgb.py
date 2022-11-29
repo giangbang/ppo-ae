@@ -30,6 +30,7 @@ reduce = {
     "last": lambda x: x[-1],
     "first": lambda x: x[0],
     "random": lambda x: x[torch.randint(high=len(x), size=(1,))],
+    "min": lambda x: x.min(),
 }
 
 def parse_args():
