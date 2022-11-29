@@ -747,6 +747,7 @@ if __name__ == "__main__":
         writer.add_scalar("WAE/reconstruct_loss", reconstruct_loss.item(), global_step)
         writer.add_scalar("WAE/kl_loss", kl_loss.item(), global_step)
         writer.add_scalar("WAE/mmd", mmd.item(), global_step)
+        writer.add_scalar("WAE/posterior_variance", log_var.exp().mean().item(), global_step)
 
 
         # log intrinsic rewards
