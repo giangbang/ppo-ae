@@ -294,6 +294,59 @@ class stateRecording:
             self.count = np.load(f)
             self.mask = np.load(f)
         self.shape = self.count.shape
+        
+class TrajectoryVisualizer:
+    def __init__(self, env):
+        self.frames = []
+        self.obs_shape = env.observation_space.shape
+        
+    def add_frame(self, obs):
+        self.frames.append(obs)
+        
+    def add_traj(self, traj: list):
+        self.frames = traj
+
+    def plot_trajectory(self, encoder, device='cpu'):
+        import torch
+        import numpy as np
+        import random
+        import matplotlib.pyplot as plt
+        
+        frames = np.array(self.frames)
+        frames = torch.Tensor(frames).to(device).reshape(-1, *self.obs_shape)
+        with torch.no_grad():
+            encoder.eval()
+            embedding = encoder(frames).cpu().numpy().astype(np.float32)
+            encoder.train()
+        
+        if embedding.shape[-1] != 2:
+            from sklearn.manifold import TSNE
+            embedding = TSNE(n_components=2, 
+                   init='random', perplexity=3).fit_transform(embedding)
+        
+        sample_idx = np.linspace(0, len(self.frames)-1, num=10,dtype=int)
+        
+        plt.clf()
+        plt.jet()
+        plt.scatter(embedding[:, 0], embedding[:, 1], 
+                c=np.arange(len(embedding)), edgecolors='black', zorder=1)
+        
+        # from matplotlib.offsetbox import (TextArea, DrawingArea, OffsetImage, AnnotationBbox)
+        # ax = plt.gca()
+        # for indx in sample_idx:
+            # patch = self.frames[indx]
+            # im = OffsetImage(patch, zoom=.3)
+            # im.image.axes = ax
+            # ab = AnnotationBbox(im, embedding[indx],
+                            # xybox=(random.uniform(-30, 30), random.uniform(-30, 30)),
+                            # xycoords='data',
+                            # boxcoords="offset points",
+                            # pad=0.1,
+                            # arrowprops=dict(arrowstyle="->"))
+
+            # ax.add_artist(ab)
+        return plt.gcf()
+        
 
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''
