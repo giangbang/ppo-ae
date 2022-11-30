@@ -31,6 +31,7 @@ reduce = {
     "first": lambda x: x[0],
     "random": lambda x: x[torch.randint(high=len(x), size=(1,))],
     "min": lambda x: x.min(),
+    "knn": lambda x, k=10: x.sort()[0][:10].sum(),
 }
 
 def parse_args():
