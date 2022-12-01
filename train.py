@@ -3,19 +3,27 @@
 import os
 import sys
 import numpy as np
+import argparse
 
 
 env_ids = ["MiniGrid-DoorKey-8x8-v0", 
            "MiniGrid-MultiRoom-N6-v0", 
            "MiniGrid-SimpleCrossingS9N3-v0"]
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--n-seeds", type=int, default=2,
+        help="total number of seeds")
+parser.add_argument("--total-timesteps", type=int, default=1_000_000,
+        help="total timesteps of the experiments")
 
-n_seeds = 5
+args = parser.parse_args()
+
+n_seeds = args.n_seeds
 seeds = np.random.randint(9999999, size=n_seeds)
 print("seed", seeds)
 
 config = {
-    "total-timesteps": 3_000_000,
+    "total-timesteps": args.total_timesteps,
     "learning-rate" : 3e-4,
     "ae-dim": 20,
     "ae-batch-size": 32,
