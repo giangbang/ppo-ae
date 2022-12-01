@@ -484,7 +484,7 @@ if __name__ == "__main__":
     torch.save({
         'agent': agent.state_dict(),
         'encoder': encoder,
-    }, f'weights_{signature}.pt')
+    }, f'weights_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt')
 
     if args.visualize_states:
-        record_state.save_to(f"state_heatmap_{signature}.npy")
+        record_state.save_to(f"state_heatmap_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.npy")

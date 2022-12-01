@@ -560,4 +560,4 @@ if __name__ == "__main__":
         'agent': agent.state_dict(),
         'encoder': encoder,
         'decoder': decoder
-    }, 'weights.pt')
+    }, f'weights_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt')

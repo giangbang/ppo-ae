@@ -34,7 +34,7 @@ config = {
 }
 
 # Train with VAE
-for env_id in env_ids
+for env_id in env_ids:
     for seed in seeds:
         command = (f"python -m src.ppo_vae_cnt_distance_rgb --env-id {env_id} "
             f"--beta 1e-5 --seed {seed} --deterministic-latent True "
@@ -45,7 +45,7 @@ for env_id in env_ids
         os.system(command)
         
 # Train with AE
-for env_id in env_ids
+for env_id in env_ids:
     for seed in seeds:
         command = (f"python -m src.ppo_ae_cnt_distance_minigrid_rgb --env-id {env_id} "
             f"--beta 0 --seed {seed}  "
