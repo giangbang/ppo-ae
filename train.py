@@ -35,7 +35,7 @@ config = {
     "adjacent_norm_coef": 1e-3,
     "window-size-episode": 300,
     "distance-clip": 1,
-    "reward-scale": 5.,
+    "reward-scale": 5,
     "fixed-seed": "True",
     "update-epochs": 3,
     "reduce": "min",
