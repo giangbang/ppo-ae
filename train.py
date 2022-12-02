@@ -27,19 +27,20 @@ print("seed", seeds)
 config = {
     "total-timesteps": args.total_timesteps,
     "learning-rate" : 3e-4,
-    "ae-dim": 50,
+    "ae-dim": 100,
     "ae-batch-size": 32,
     "ae-buffer-size": 50_000,
     "save-sample-AE-reconstruction-every": 5_000,
-    "rw-coef": 1e-3,
+    "rw-coef": 1e-2,
     "adjacent_norm_coef": 1e-3,
-    "window-size-episode": 20,
-    "distance-clip": 0.5,
+    "window-size-episode": 300,
+    "distance-clip": 1,
     "reward-scale": 5.,
     "fixed-seed": "True",
     "update-epochs": 3,
-    "reduce": "mean",
-    "save-final-model": "True"
+    "reduce": "min",
+    "save-final-model": "True",
+    "ae-warmup-steps": 1000
 }
 
 # Train with VAE
