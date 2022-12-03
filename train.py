@@ -58,6 +58,7 @@ config = {
     "reduce": "min",
     "save-final-model": "True",
     "ae-warmup-steps": 1000,
+    "save-final-buffer": True,
 }
 
 env_id = env_ids[args.env_indx]
