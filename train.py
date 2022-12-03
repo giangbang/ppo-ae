@@ -7,8 +7,8 @@ from distutils.util import strtobool
 import argparse
 
 
-env_ids = ["MiniGrid-DoorKey-8x8-v0", 
-           "MiniGrid-MultiRoom-N6-v0", 
+env_ids = ["MiniGrid-DoorKey-8x8-v0",
+           "MiniGrid-FourRooms-v0", 
            "MiniGrid-SimpleCrossingS9N3-v0"]
 
 parser = argparse.ArgumentParser()
@@ -62,7 +62,7 @@ def train_vae():
             command += f" --{h} {v}"
         print(command)
         os.system(command)
-        
+
 # Train with AE
 def train_ae():
     for seed in seeds:
