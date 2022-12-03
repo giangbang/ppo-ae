@@ -79,8 +79,12 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--save-model-every", type=int, default=200_000,
-        help="Save model every env steps")
+    parser.add_argument("--save-checkpoint-every", type=int, default=-1,
+        help="Save model every env steps, -1 means no saving")
+    parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="whether to save the final model at the end of the training or not")
+    parser.add_argument("--reward-scale", type=float, default=1,
+                help="scaling factor for extrinsic rewards")
 
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
@@ -95,7 +99,7 @@ def parse_args():
         help="Save training AE data buffer every env steps")
     parser.add_argument("--save-sample-AE-reconstruction-every", type=int, default=200_000,
         help="Save sample reconstruction from AE every env steps")
-        
+
     # visualization of the state distribution
     parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Visualize state distribution by heatmaps.")
@@ -105,7 +109,7 @@ def parse_args():
         help="Fixed seed when reset env.")
 
 
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
     if args.visualize_states:
         # only work with 1 environment
         args.num_envs = 1
@@ -135,7 +139,7 @@ class PixelEncoder(nn.Module):
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
-        
+
         from torchvision.transforms import Resize
         self.resize = Resize((84, 84)) # Input image is resized to []
 
@@ -177,7 +181,7 @@ class PixelEncoder(nn.Module):
 
         # h_norm = self.ln(h_fc)
         # self.outputs['ln'] = h_norm
-        
+
         self.outputs['latent'] = h_fc
 
         return h_fc
@@ -263,7 +267,7 @@ if __name__ == "__main__":
     pprint(vars(args))
 
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, 
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video,
             run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
@@ -298,7 +302,8 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
-    
+    last_checkpoint = 0
+
     """ For visualization """
     if args.visualize_states:
         record_state = stateRecording(envs.envs[0])
@@ -328,16 +333,16 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
-            
+
             if args.visualize_states:
                 record_state.add_count_from_env(envs.envs[0])
                 if args.whiten_rewards:
                     """ hide reward from agents """
                     reward = np.zeros_like(reward)
-            
+
             rewards_all += np.array(reward).reshape(rewards_all.shape)
             done = np.bitwise_or(terminated, truncated)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
             # log success and rewards
@@ -455,6 +460,17 @@ if __name__ == "__main__":
                 writer.add_figure("state_distribution/heatmap",
                         record_state.get_figure_log_scale(), global_step)
 
+        # for some every step, save the current weight model
+        if args.save_checkpoint_every > 0 and global_step > (args.save_checkpoint_every+last_checkpoint):
+            model_weights_path = f"model_weights_{args.exp_name}_{args.env_id}_{args.seed}"
+            os.makedirs(model_weights_path, exist_ok=True)
+            file_path = os.path.join(model_weights_path, f"step_{global_step}.pt")
+            torch.save({
+                'agent': agent.state_dict(),
+                'encoder': encoder.state_dict(),
+            }, file_path)
+            last_checkpoint = global_step
+
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
@@ -481,10 +497,11 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
-    torch.save({
-        'agent': agent.state_dict(),
-        'encoder': encoder,
-    }, f'weights_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt')
+    if args.save_final_model:
+        torch.save({
+            'agent': agent.state_dict(),
+            'encoder': encoder,
+        }, f'weights_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt')
 
     if args.visualize_states:
         record_state.save_to(f"state_heatmap_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.npy")

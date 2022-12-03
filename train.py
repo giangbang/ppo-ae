@@ -8,7 +8,7 @@ import argparse
 
 
 env_ids = ["MiniGrid-DoorKey-8x8-v0",
-           "MiniGrid-FourRooms-v0", 
+           "MiniGrid-FourRooms-v0",
            "MiniGrid-SimpleCrossingS9N3-v0"]
 
 parser = argparse.ArgumentParser()
@@ -18,18 +18,27 @@ parser.add_argument("--total-timesteps", type=int, default=1_000_000,
         help="total timesteps of the experiments")
 parser.add_argument("--env-indx", type=int, default=0,
         help="run index of the experiments")
-parser.add_argument("--train-vae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
-        help="Training whether AE or VAE.")
+# parser.add_argument("--train-vae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+#         help="Training whether AE or VAE.")
 parser.add_argument("--use-exp", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using exploration bonus or not.")
 parser.add_argument("--use-l2", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using l2 regularization or not.")
+parser.add_argument("--train-ppo-only", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Training a baseline PPO without reconstruction loss")
+
+parser.add_argument("--seed", type=int, default=-1,
+        help="seed for training, if this is > 0, will override the n-seeds")
 
 
 args = parser.parse_args()
 
-n_seeds = args.n_seeds
-seeds = np.random.randint(9999999, size=n_seeds)
+if args.seed <= 0:
+    n_seeds = args.n_seeds
+    seeds = np.random.randint(9999999, size=n_seeds)
+else:
+    n_seeds = 1
+    seeds = [args.seed]
 print("seed", seeds)
 
 config = {
@@ -74,7 +83,19 @@ def train_ae():
         print(command)
         os.system(command)
 
-if args.train_vae:
-    train_vae()
+def train_ppo_only():
+    for seed in seeds:
+        command = (f"python -m pure_ppo.ppo_minigrid_rgb --env-id {env_id} "
+            f" --seed {seed} "
+        )
+        for h, v in config.items():
+            command += f" --{h} {v}"
+        print(command)
+        os.system(command)
+
+if args.train_ppo_only:
+    train_ppo_only()
 else:
+    # train both ae and vae on the same seed with minigrid
+    train_vae()
     train_ae()
