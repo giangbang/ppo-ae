@@ -23,7 +23,8 @@ parser.add_argument("--use-exp", type=lambda x: bool(strtobool(x)), default=True
         help="Training using exploration bonus or not.")
 parser.add_argument("--use-l2", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using l2 regularization or not.")
-
+parser.add_argument("--use-visualize", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Apply visualization and whiten rewards or not.")
 
 args = parser.parse_args()
 
@@ -49,6 +50,12 @@ config = {
     "save-final-model": "True",
     "ae-warmup-steps": 1000,
 }
+
+if args.use_visualize:
+    config.update({
+        "visualize-states": "True",
+        "whiten-rewards": "True",
+    })
 
 env_id = env_ids[args.env_indx]
 # Train with VAE
