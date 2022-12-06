@@ -505,3 +505,6 @@ if __name__ == "__main__":
 
     if args.visualize_states:
         record_state.save_to(f"state_heatmap_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.npy")
+        record_state.get_figure_log_scale()
+        import matplotlib.pyplot as plt
+        plt.savefig(f"heatmap_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.svg", format="svg",transparent=True)
