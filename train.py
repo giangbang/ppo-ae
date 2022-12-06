@@ -35,11 +35,16 @@ parser.add_argument("--use-visualize", type=lambda x: bool(strtobool(x)), defaul
         help="Apply visualization and whiten rewards or not.")
 parser.add_argument("--seed", type=int, default=-1,
         help="seed for training, if this is > 0, will override the n-seeds")
+parser.add_argument("--use-preset-seeds", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Training using a set of presetted seed.")
 
 
 args = parser.parse_args()
 
-if args.seed < 0:
+if args.use_preset_seeds:
+    seeds = [84126, 1751697, 9863879, 9485642]
+    n_seeds = len(seeds)
+elif args.seed < 0:
     n_seeds = args.n_seeds
     seeds = np.random.randint(9999999, size=n_seeds)
 else:
