@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 import random
 import time
 from distutils.util import strtobool
@@ -21,66 +22,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-class CustomFlatObsWrapper(gym.core.ObservationWrapper):
-    '''
-    This is the extended version of the `FlatObsWrapper` from `gym-minigrid`,
-    Which only considers the case where the observation contains both `image` and `mission`
-    This custom wrapper can work with both cases, i.e whether the `mission` presents or not
-    Since `mission` can be discarded when being wrapped with `ImgObsWrapper` for example.
-    '''
-    def __init__(self, env, maxStrLen=96):
-        super().__init__(env)
+from utils.common import *
 
-        self.maxStrLen = maxStrLen
-        self.numCharCodes = 27
-
-        if isinstance(env.observation_space, spaces.Dict):
-            imgSpace = env.observation_space.spaces['image']
-        else:
-            imgSpace = env.observation_space
-        imgSize = reduce(operator.mul, imgSpace.shape, 1)
-
-        self.observation_space = spaces.Box(
-            low=0,
-            high=255,
-            shape=(imgSize + self.numCharCodes * self.maxStrLen,),
-            dtype='uint8'
-        )
-
-        self.cachedStr = None
-        self.cachedArray = None
-
-    def observation(self, obs):
-        if isinstance(obs, dict):
-            return self._observation(obs)
-        return obs.flatten()
-
-
-    def _observation(self, obs):
-        image = obs['image']
-        mission = obs['mission']
-
-        # Cache the last-encoded mission string
-        if mission != self.cachedStr:
-            assert len(mission) <= self.maxStrLen, 'mission string too long ({} chars)'.format(len(mission))
-            mission = mission.lower()
-
-            strArray = np.zeros(shape=(self.maxStrLen, self.numCharCodes), dtype='float32')
-
-            for idx, ch in enumerate(mission):
-                if ch >= 'a' and ch <= 'z':
-                    chNo = ord(ch) - ord('a')
-                elif ch == ' ':
-                    chNo = ord('z') - ord('a') + 1
-                assert chNo < self.numCharCodes, '%s : %d' % (ch, chNo)
-                strArray[idx, chNo] = 1
-
-            self.cachedStr = mission
-            self.cachedArray = strArray
-
-        obs = np.concatenate((image.flatten(), self.cachedArray.flatten()))
-
-        return obs
 
 def parse_args():
     # fmt: off
@@ -137,72 +80,41 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
+    parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="whether to save the final model at the end of the training or not")
+    parser.add_argument("--reward-scale", type=float, default=10,
+            help="scaling factor for extrinsic rewards")
 
     # auto encoder parameters
     parser.add_argument("--ae-dim", type=int, default=50,
         help="number of hidden dim in ae")
-    parser.add_argument("--ae-batch-size", type=int, default=256,
+    parser.add_argument("--ae-batch-size", type=int, default=128,
         help="AE batch size")
     parser.add_argument("--ae-training-step", type=int, default=10000,
         help="number of training steps in ae")
-    parser.add_argument("--ae-env-step", type=int, default=10000,
-        help="number of random exploration steps to collect data to train ae")
+    parser.add_argument("--load-buffer", type=str, default="",
+        help="Load buffer from expert policy if provided")
+    parser.add_argument("--ae-buffer-size", type=int, default=100_000,
+        help="buffer size for training ae, recommend less than 200k ")
     parser.add_argument("--beta", type=float, default=0.01,
         help="L2 norm of the latent vectors")
 
-    args = parser.parse_args()
+    # visualization of the state distribution
+    parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Visualize state distribution by heatmaps.")
+    parser.add_argument("--whiten-rewards", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Hide rewards signal from agent.")
+    parser.add_argument("--fixed-seed", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Fixed seed when reset env.")
+
+    args, unknown = parser.parse_known_args()
+    if args.visualize_states:
+        # only work with 1 environment
+        args.num_envs = 1
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
-
-class TransposeImageWrapper(gym.ObservationWrapper):
-    '''Transpose img dimension before being fed to neural net'''
-    def __init__(self, env, op=[2,0,1]):
-        super().__init__(env)
-        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
-        self.op = op
-        obs_shape = self.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            self.observation_space.low[0, 0, 0],
-            self.observation_space.high[0, 0, 0], [
-                obs_shape[self.op[0]], obs_shape[self.op[1]],
-                obs_shape[self.op[2]]
-            ],
-            dtype=self.observation_space.dtype)
-
-    def observation(self, ob):
-        return ob.transpose(self.op[0], self.op[1], self.op[2])
-
-def make_env(env_id, seed, idx, capture_video, run_name):
-    def thunk():
-        env = gymnasium.make(env_id)
-        from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
-        env = RGBImgObsWrapper(env)
-        env = ImgObsWrapper(env)
-        env = TransposeImageWrapper(env)
-
-        env.action_space = gym.spaces.Discrete(env.action_space.n)
-        env.observation_space = gym.spaces.Box(
-            low=np.zeros(shape=env.observation_space.shape,dtype=int),
-            high=np.ones(shape=env.observation_space.shape,dtype=int)*255
-        )
-        print("obs shape", np.array(env.reset()[0]).shape)
-
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        if capture_video:
-            if idx == 0:
-                env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        try:
-            env.seed(seed)
-        except:
-            print("cannot seed the environment")
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
-        return env
-
-    return thunk
-
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -213,26 +125,20 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # https://github.com/denisyarats/pytorch_sac_ae/blob/master/encoder.py#L11
 # ===================================
 
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
-
 OUT_DIM = {2: 39, 4: 35, 6: 31}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         assert len(obs_shape) == 3
-        print('feature dim',  feature_dim)
 
         self.feature_dim = feature_dim
         self.num_layers = num_layers
 
         from torchvision.transforms import Resize
-        self.resize = Resize((84, 84)) # Input image is resized to [64x64]
+        self.resize = Resize((84, 84), interpolation=0) # Input image is resized to []
 
         self.convs = nn.ModuleList(
             [nn.Conv2d(obs_shape[0], num_filters, 3, stride=2)]
@@ -242,13 +148,13 @@ class PixelEncoder(nn.Module):
 
         out_dim = OUT_DIM[num_layers]
         self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
-        self.ln = nn.LayerNorm(self.feature_dim)
+        # self.ln = nn.LayerNorm(self.feature_dim)
 
         self.outputs = dict()
 
     def forward_conv(self, obs):
         obs = self.resize(obs)
-        obs = obs / 255.
+        obs = (obs -128)/ 128.
         self.outputs['obs'] = obs
 
         conv = torch.relu(self.convs[0](obs))
@@ -257,6 +163,7 @@ class PixelEncoder(nn.Module):
         for i in range(1, self.num_layers):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
+
         h = conv.view(conv.size(0), -1)
         return h
 
@@ -267,25 +174,13 @@ class PixelEncoder(nn.Module):
             h = h.detach()
 
         h_fc = self.fc(h)
-        self.outputs['fc'] = h_fc
 
-        h_norm = self.ln(h_fc)
-        self.outputs['ln'] = h_norm
+        self.outputs['latent'] = h_fc
 
-        # out = torch.ReLU(h_norm)
-        out = h_norm
-        self.outputs['tanh'] = out
-
-        return out
-
-    def copy_conv_weights_from(self, source):
-        """Tie convolutional layers"""
-        # only tie conv layers
-        for i in range(self.num_layers):
-            tie_weights(src=source.convs[i], trg=self.convs[i])
+        return h_fc
 
 class PixelDecoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim=50, num_layers=4, num_filters=32):
+    def __init__(self, obs_shape, feature_dim, num_layers=4, num_filters=32):
         super().__init__()
 
         self.num_layers = num_layers
@@ -322,9 +217,11 @@ class PixelDecoder(nn.Module):
             self.outputs['deconv%s' % (i + 1)] = deconv
 
         obs = self.deconvs[-1](deconv)
+        obs = torch.tanh(obs)
         self.outputs['obs'] = obs
 
         return obs
+
 
 # ===================================
 
@@ -333,16 +230,16 @@ class Agent(nn.Module):
         super().__init__()
         self.critic = nn.Sequential(
             layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, 1), std=1.0),
         )
         self.actor = nn.Sequential(
             layer_init(nn.Linear(np.array(obs_shape).prod(), hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, hidden_dim)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, envs.single_action_space.n), std=0.01),
         )
 
@@ -350,7 +247,7 @@ class Agent(nn.Module):
         return self.critic(x)
 
     def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
+        logits = self.actor(x.detach()) # gradient stopping of the encoder
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
@@ -378,6 +275,11 @@ if __name__ == "__main__":
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
+    # log command to run this file
+    import sys
+    cmd = " ".join(sys.argv)
+    writer.add_text("terminal", cmd)
+
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -391,15 +293,18 @@ if __name__ == "__main__":
     ae_dim=args.ae_dim
     # setup random timesteps to collect data for training AE (prior to training of PPO)
     # (after AE is trained on random samples, this AE is freezed for training PPO)
-    ae_env_step = args.ae_env_step
+    ae_env_step = args.ae_buffer_size
     # number of update of AE
     ae_num_train_step = args.ae_training_step
     ae_batch_size = args.ae_batch_size
     # control the l2 regularization of the latent vectors
     beta=args.beta
 
+    pprint(vars(args))
+
     # env setup
-    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    envs = [make_env(args.env_id, args.seed + i, i, args.capture_video,
+            run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
@@ -408,25 +313,34 @@ if __name__ == "__main__":
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-
+    print(agent)
     encoder, decoder = (
         PixelEncoder(envs.single_observation_space.shape, ae_dim).to(device),
         PixelDecoder(envs.single_observation_space.shape, ae_dim).to(device)
     )
+    print(encoder)
+    print(decoder)
     encoder_optim = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-5)
     decoder_optim = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # Collect random transitions for training AE
-    curr_states, _ = envs.reset()
-    ae_dataset = [curr_states]
-    for _ in range(ae_env_step):
-        actions = envs.action_space.sample()
-        next_obs, reward, terminated, truncated, info = envs.step(actions)
-        done = np.bitwise_or(terminated, truncated)
-        ae_dataset.append(next_obs)
+    if len(args.load_buffer) == 0:
+        curr_states, _ = envs.reset()
+        ae_dataset = [curr_states]
+        for _ in range(ae_env_step//args.num_envs):
+            actions = envs.action_space.sample()
+            next_obs, reward, terminated, truncated, info = envs.step(actions)
+            ae_dataset.append(next_obs)
 
-    ae_dataset = np.array(ae_dataset, dtype=np.float32)
-    ae_dataset = ae_dataset.reshape((-1,)+ ae_dataset.shape[-3:])
+        ae_dataset = np.array(ae_dataset, dtype=np.uint8)
+
+    else:
+        ae_dataset = torch.load(args.load_buffer).numpy()
+
+    # reshape to suitable sizes
+    ae_dataset = ae_dataset.reshape((-1,)+ envs.single_observation_space.shape)
+    print("Training sizes", ae_dataset.shape)
+
     for i in range(ae_num_train_step):
         indices = np.random.randint(0, len(ae_dataset), ae_batch_size)
         batch = ae_dataset[indices]
@@ -434,8 +348,8 @@ if __name__ == "__main__":
         latent = encoder(batch)
         reconstruct = decoder(latent)
         assert encoder.outputs['obs'].shape == reconstruct.shape
-        loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs']) + beta * torch.linalg.norm(latent)
-        writer.add_scalar("ae/loss", loss.item(), i)
+        loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+        writer.add_scalar("AE/loss", loss.item(), i)
 
         encoder_optim.zero_grad()
         decoder_optim.zero_grad()
@@ -450,12 +364,12 @@ if __name__ == "__main__":
     batch = torch.Tensor(batch).to(device)
     latent = encoder(batch)
     reconstruct = decoder(latent)
-    reconstruct = (reconstruct * 255).cpu()
+    reconstruct = (reconstruct *128 + 128).clip(0, 255).cpu()
 
     # log the reconstruct image
-    for o, r in zip(batch.cpu(), reconstruct.cpu()):
-        writer.add_image('image/AE reconstruction', r)
-        writer.add_image('image/original', o)
+    for i, (o, r) in enumerate(zip(batch.cpu(), reconstruct)):
+        writer.add_image('image/AE reconstruction', r.type(torch.uint8), i)
+        writer.add_image('image/original', o.type(torch.uint8), i)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs, args.ae_dim)).to(device)
@@ -508,16 +422,16 @@ if __name__ == "__main__":
             # log success and rewards
             for i, d in enumerate(done):
                 if d:
-                    writer.add_scalar("train/rewards", reward[i], global_step)
-                    writer.add_scalar("train/success", reward[i] > 0.1, global_step)
-                    reward[i] = 0
+                    writer.add_scalar("train/rewards", rewards_all[i], global_step)
+                    writer.add_scalar("train/success", rewards_all[i] > 0.05, global_step)
+                    rewards_all[i] = 0
 
-            for item in info:
-                if "episode" in item:
-                    print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
-                    writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
-                    writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
-                    break
+            # for item in info:
+            #     if "episode" in item:
+            #         print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
+            #         writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
+            #         writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
+            #         break
 
         # bootstrap value if not done
         with torch.no_grad():

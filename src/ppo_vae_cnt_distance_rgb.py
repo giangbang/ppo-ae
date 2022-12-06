@@ -89,8 +89,8 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--save-model-every", type=int, default=200_000,
-        help="Save model every env steps")
+    parser.add_argument("--save-checkpoint-every", type=int, default=-1,
+        help="Save model every env steps, -1 means no saving")
     parser.add_argument("--save-final-model", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="whether to save the final model at the end of the training or not")
     parser.add_argument("--reward-scale", type=float, default=2,
@@ -113,7 +113,8 @@ def parse_args():
         help="Save sample reconstruction from AE every env steps")
     parser.add_argument("--deterministic-latent", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Deterministically sample from VAE when inference")
-
+    parser.add_argument("--save-final-buffer", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="Save the buffer at the end of training")
 
     # intrinsic learning parameters
     parser.add_argument("--rw-coef", type=float, default=0.1,
@@ -136,7 +137,7 @@ def parse_args():
         help="Fixed seed when reset env.")
 
 
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
     if args.visualize_states:
         # only work with 1 environment
         args.num_envs = 1
@@ -425,6 +426,7 @@ if __name__ == "__main__":
     rewards_all = np.zeros(args.num_envs)
     prev_time=time.time()
     prev_global_timestep = 0
+    last_checkpoint = 0
 
     intrinsic_reward_measures = []
     latent_distance_measures = []
@@ -664,6 +666,18 @@ if __name__ == "__main__":
             file_path = os.path.join("ae_data", f"step_{global_step}.pt")
             torch.save(buffer_ae[:current_ae_buffer_size], file_path)
 
+        # for some every step, save the current weight model
+        if args.save_checkpoint_every > 0 and global_step > (args.save_checkpoint_every+last_checkpoint):
+            model_weights_path = f"model_weights_{args.exp_name}_{args.env_id}_{args.seed}"
+            os.makedirs(model_weights_path, exist_ok=True)
+            file_path = os.path.join(model_weights_path, f"step_{global_step}.pt")
+            torch.save({
+                'agent': agent.state_dict(),
+                'encoder': encoder.state_dict(),
+                'decoder': decoder.state_dict()
+            }, file_path)
+            last_checkpoint = global_step
+
         # for some every step, save the image reconstructions of AE, for debugging purpose
         if (global_step-prev_global_timestep)>=args.save_sample_AE_reconstruction_every:
             # AE reconstruction
@@ -736,6 +750,9 @@ if __name__ == "__main__":
             'encoder': encoder.state_dict(),
             'decoder': decoder.state_dict()
         }, f'weights_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt')
+
+    if args.save_final_buffer:
+        torch.save(buffer_ae, f"buffer_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.pt")
 
     if args.visualize_states:
         record_state.save_to(f"state_heatmap_{args.exp_name}_{args.env_id}_{signature}_{args.seed}.npy")
