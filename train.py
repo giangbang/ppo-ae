@@ -18,8 +18,14 @@ parser.add_argument("--total-timesteps", type=int, default=1_000_000,
         help="total timesteps of the experiments")
 parser.add_argument("--env-indx", type=int, default=0,
         help="run index of the experiments")
-# parser.add_argument("--train-vae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
-#         help="Training whether AE or VAE.")
+        
+parser.add_argument("--train-vae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+        help="Training VAE?.")
+parser.add_argument("--train-ae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+        help="Training AE?")
+parser.add_argument("--train-ppo", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+        help="Training pure PPO?")
+        
 parser.add_argument("--use-exp", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using exploration bonus or not.")
 parser.add_argument("--use-l2", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
@@ -27,8 +33,6 @@ parser.add_argument("--use-l2", type=lambda x: bool(strtobool(x)), default=True,
 
 parser.add_argument("--use-visualize", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Apply visualization and whiten rewards or not.")
-parser.add_argument("--train-ppo-only", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
-        help="Training a baseline PPO without reconstruction loss")
 parser.add_argument("--seed", type=int, default=-1,
         help="seed for training, if this is > 0, will override the n-seeds")
 
@@ -92,7 +96,7 @@ def train_ae():
         print(command)
         os.system(command)
 
-def train_ppo_only():
+def train_ppo():
     for seed in seeds:
         command = (f"python -m pure_ppo.ppo_minigrid_rgb --env-id {env_id} "
             f" --seed {seed} "
@@ -102,9 +106,9 @@ def train_ppo_only():
         print(command)
         os.system(command)
 
-if args.train_ppo_only:
-    train_ppo_only()
-else:
-    # train both ae and vae on the same seed with minigrid
+if args.train_ppo:
+    train_ppo()
+if args.train_vae:
     train_vae()
+if args.train_ae:
     train_ae()
