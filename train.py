@@ -77,6 +77,7 @@ if args.use_visualize:
         "visualize-states": "True",
         "whiten-rewards": "True",
     })
+    config["rw-coef"] = 10
 
 env_id = env_ids[args.env_indx]
 # Train with VAE
