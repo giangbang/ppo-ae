@@ -18,14 +18,14 @@ parser.add_argument("--total-timesteps", type=int, default=1_000_000,
         help="total timesteps of the experiments")
 parser.add_argument("--env-indx", type=int, default=0,
         help="run index of the experiments")
-        
+
 parser.add_argument("--train-vae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training VAE?.")
 parser.add_argument("--train-ae", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training AE?")
 parser.add_argument("--train-ppo", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training pure PPO?")
-        
+
 parser.add_argument("--use-exp", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using exploration bonus or not.")
 parser.add_argument("--use-l2", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
