@@ -70,7 +70,7 @@ config = {
     "reduce": "min",
     "save-final-model": "True",
     "ae-warmup-steps": 1000,
-    "save-final-buffer": True,
+    "save-final-buffer": False,
 }
 
 if args.use_visualize:
