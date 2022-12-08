@@ -9,7 +9,8 @@ import argparse
 
 env_ids = ["MiniGrid-DoorKey-8x8-v0",
            "MiniGrid-FourRooms-v0",
-           "MiniGrid-SimpleCrossingS9N3-v0"]
+           "MiniGrid-SimpleCrossingS9N3-v0",
+           "MiniGrid-MultiRoom-N4-S5-v0"]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--n-seeds", type=int, default=2,
