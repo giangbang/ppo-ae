@@ -350,12 +350,12 @@ class TrajectoryVisualizer:
 class MiniGridCount:
     """ Count state visitation in MiniGrid, used to derived UCB rewards """
     def __init__(self, envs, hash_size = 20):
-        self.envs = envs
+        self.envs = envs.envs
         self.cnt = {}
         self.hash_size = hash_size
 
     def update(self):
-        for env in envs:
+        for env in self.envs:
             hash_val = env.hash(self.hash_size)
             self.cnt[hash_val] = self.cnt.get(env.hash(), 0) + 1
 
