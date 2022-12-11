@@ -357,7 +357,7 @@ class MiniGridCount:
     def update(self):
         for env in self.envs:
             hash_val = env.hash(self.hash_size)
-            self.cnt[hash_val] = self.cnt.get(env.hash(), 0) + 1
+            self.cnt[hash_val] = self.cnt.get(hash_val, 0) + 1
 
     def get_cnt(self): 
         cnts = [self.cnt.get(env.hash(self.hash_size), 0) for env in self.envs]
