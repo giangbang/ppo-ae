@@ -118,7 +118,7 @@ def train_ppo():
 
 # Experimenting, this is new feature
 def train_ppo_vae_count():
-    for seed in seeds:
+    for seed in seeds[:n_seeds]:
         command = (f"python -m src.ppo_vae_truecount_rgb --env-id {env_id} "
             f"--beta 1e-5 --seed {seed} --deterministic-latent True "
         )
