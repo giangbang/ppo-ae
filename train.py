@@ -73,6 +73,8 @@ config = {
     "save-final-buffer": False,
 }
 
+env_id = env_ids[args.env_indx]
+
 if args.use_visualize:
     config.update({
         "visualize-states": "True",
@@ -80,10 +82,9 @@ if args.use_visualize:
     })
     config["rw-coef"] = 10 if args.use_exp else 0
 
-env_id = env_ids[args.env_indx]
 # Train with VAE
 def train_vae():
-    for seed in seeds:
+    for seed in seeds[:n_seeds]:
         command = (f"python -m src.ppo_vae_cnt_distance_rgb --env-id {env_id} "
             f"--beta 1e-5 --seed {seed} --deterministic-latent True "
         )
@@ -94,7 +95,7 @@ def train_vae():
 
 # Train with AE
 def train_ae():
-    for seed in seeds:
+    for seed in seeds[:n_seeds]:
         command = (f"python -m src.ppo_ae_cnt_distance_minigrid_rgb --env-id {env_id} "
             f"--beta 0 --seed {seed} --weight-decay 0 "
         )
@@ -104,7 +105,7 @@ def train_ae():
         os.system(command)
 
 def train_ppo():
-    for seed in seeds:
+    for seed in seeds[:n_seeds]:
         command = (f"python -m pure_ppo.ppo_minigrid_rgb --env-id {env_id} "
             f" --seed {seed} "
         )
