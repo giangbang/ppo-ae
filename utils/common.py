@@ -346,7 +346,22 @@ class TrajectoryVisualizer:
 
             # ax.add_artist(ab)
         return plt.gcf()
-        
+
+class MiniGridCount:
+    """ Count state visitation in MiniGrid, used to derived UCB rewards """
+    def __init__(self, envs, hash_size = 20):
+        self.envs = envs.envs
+        self.cnt = {}
+        self.hash_size = hash_size
+
+    def update(self):
+        for env in self.envs:
+            hash_val = env.hash(self.hash_size)
+            self.cnt[hash_val] = self.cnt.get(hash_val, 0) + 1
+
+    def get_cnt(self): 
+        cnts = [self.cnt.get(env.hash(self.hash_size), 0) for env in self.envs]
+        return np.array(cnts)
 
 def pprint(dict_data):
     '''Pretty print Hyper-parameters'''

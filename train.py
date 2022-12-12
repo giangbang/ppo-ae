@@ -26,6 +26,8 @@ parser.add_argument("--train-ae", type=lambda x: bool(strtobool(x)), default=Tru
         help="Training AE?")
 parser.add_argument("--train-ppo", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training pure PPO?")
+parser.add_argument("--train-vae-cnt", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+        help="Training VAE+cnt?")
 
 parser.add_argument("--use-exp", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Training using exploration bonus or not.")
@@ -114,9 +116,22 @@ def train_ppo():
         print(command)
         os.system(command)
 
+# Experimenting, this is new feature
+def train_ppo_vae_count():
+    for seed in seeds:
+        command = (f"python -m src.ppo_vae_truecount_rgb --env-id {env_id} "
+            f"--beta 1e-5 --seed {seed} --deterministic-latent True "
+        )
+        for h, v in config.items():
+            command += f" --{h} {v}"
+        print(command)
+        os.system(command)
+
 if args.train_ppo:
     train_ppo()
 if args.train_vae:
     train_vae()
 if args.train_ae:
     train_ae()
+if args.train_vae_cnt:
+    train_ppo_vae_count()
