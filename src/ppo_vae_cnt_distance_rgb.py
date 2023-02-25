@@ -385,6 +385,7 @@ if __name__ == "__main__":
         envs
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    print(envs.observation_space.shape)
 
     agent = Agent(envs, obs_shape=ae_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
