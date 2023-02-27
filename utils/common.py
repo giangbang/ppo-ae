@@ -211,8 +211,10 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
 def make_env(env_id, *args, **kwargs):
     if "MiniGrid" in env_id:
         return make_minigrid_rgb_env(env_id, *args, **kwargs)
-    else:
+    elif kwargs["atari"]:
         return make_atari_env(env_id, *args, **kwargs)
+    else:
+        return gym.make(env_id)
 
 class stateRecording:
     """recording state distributions, for ploting visitation frequency heatmap"""
