@@ -6,7 +6,6 @@ import sys
 import random
 import time
 from distutils.util import strtobool
-import minigrid
 import gym
 from gym import spaces
 import numpy as np
