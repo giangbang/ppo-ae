@@ -387,7 +387,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = [make_env(args.env_id, args.seed + i, i, args.capture_video,
-            run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
+            run_name, reseed=args.fixed_seed, atari=args.atari) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
@@ -489,7 +489,7 @@ if __name__ == "__main__":
                 if args.whiten_rewards:
                     """ hide reward from agents """
                     reward = np.zeros_like(reward)
-                    
+
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
