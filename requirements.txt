@@ -1,5 +1,7 @@
 git+https://github.com/openai/gym@6a04d49722724677610e36c1f92908e72f51da0c
+gym
 gym[atari]
+gymnasium
 autorom[accept-rom-license]
 numpy
 torch
