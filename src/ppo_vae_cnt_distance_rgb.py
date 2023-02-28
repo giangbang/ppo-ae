@@ -6,6 +6,7 @@ import sys
 import random
 import time
 from distutils.util import strtobool
+import minigrid
 import gym
 from gym import spaces
 import numpy as np
@@ -56,7 +57,6 @@ def parse_args():
     # Algorithm specific arguments
     parser.add_argument("--env-id", type=str, default="CartPole-v1",
         help="the id of the environment")
-    parser.add_argument('--atari', type=lambda x:bool(strtobool(x)), default=False, nargs="?", const=True,)
     parser.add_argument("--total-timesteps", type=int, default=500000,
         help="total timesteps of the experiments")
     parser.add_argument("--learning-rate", type=float, default=2.5e-4,
@@ -73,15 +73,8 @@ def parse_args():
         help="the lambda for the general advantage estimation")
     parser.add_argument("--num-minibatches", type=int, default=4,
         help="the number of mini-batches")
-
-    parser.add_argument("--update-epochs", type=int, default=2,
+    parser.add_argument("--update-epochs", type=int, default=4,
         help="the K epochs to update the policy")
-    parser.add_argument("--vae-update-freq", type=int, default=2,
-        help="Update vae every epoch of training epoch")
-    parser.add_argument("--sac-update-freq", type=int, default=2,
-        help="Update sac every epoch of training epoch")
-
-
     parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggles advantages normalization")
     parser.add_argument("--clip-coef", type=float, default=0.2,
@@ -386,7 +379,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = [make_env(args.env_id, args.seed + i, i, args.capture_video,
-            run_name, reseed=args.fixed_seed, atari=args.atari) for i in range(args.num_envs)]
+            run_name, reseed=args.fixed_seed) for i in range(args.num_envs)]
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs
@@ -488,7 +481,7 @@ if __name__ == "__main__":
                 if args.whiten_rewards:
                     """ hide reward from agents """
                     reward = np.zeros_like(reward)
-
+                    
             done = np.bitwise_or(terminated, truncated)
             rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
@@ -566,105 +559,103 @@ if __name__ == "__main__":
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
         clipfracs = []
-        if update % args.sac_update_freq == 0:
-            for epoch in range(args.update_epochs):
-                np.random.shuffle(b_inds)
-                for start in range(0, args.batch_size, args.minibatch_size):
-                    end = start + args.minibatch_size
-                    mb_inds = b_inds[start:end]
+        for epoch in range(args.update_epochs):
+            np.random.shuffle(b_inds)
+            for start in range(0, args.batch_size, args.minibatch_size):
+                end = start + args.minibatch_size
+                mb_inds = b_inds[start:end]
 
-                    _, newlogprob, entropy, newvalue = agent.get_action_and_value(
-                        encoder.sample(b_obs[mb_inds], deterministic=args.deterministic_latent)[0], b_actions.long()[mb_inds],
-                        # detach value and policy go here
-                        detach_value=False, detach_policy=True,
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(
+                    encoder.sample(b_obs[mb_inds], deterministic=args.deterministic_latent)[0], b_actions.long()[mb_inds],
+                    # detach value and policy go here
+                    detach_value=False, detach_policy=True,
+                )
+                logratio = newlogprob - b_logprobs[mb_inds]
+                ratio = logratio.exp()
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratio - 1) - logratio).mean()
+                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+
+                mb_advantages = b_advantages[mb_inds]
+                if args.norm_adv:
+                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+
+                # Policy loss
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                # Value loss
+                newvalue = newvalue.view(-1)
+                if args.clip_vloss:
+                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                    v_clipped = b_values[mb_inds] + torch.clamp(
+                        newvalue - b_values[mb_inds],
+                        -args.clip_coef,
+                        args.clip_coef,
                     )
-                    logratio = newlogprob - b_logprobs[mb_inds]
-                    ratio = logratio.exp()
+                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
-                    with torch.no_grad():
-                        # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                        old_approx_kl = (-logratio).mean()
-                        approx_kl = ((ratio - 1) - logratio).mean()
-                        clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+                entropy_loss = entropy.mean()
+                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
 
-                    mb_advantages = b_advantages[mb_inds]
-                    if args.norm_adv:
-                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                # gradient update of encoder and value function
+                optimizer.zero_grad()
+                encoder_optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+                optimizer.step()
+                encoder_optim.step()
 
-                    # Policy loss
-                    pg_loss1 = -mb_advantages * ratio
-                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                # training variational auto encoder
+                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                        size=(args.ae_batch_size,))
+                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+                next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
+                next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
+                done_batch = done_buffer[ae_indx_batch].to(device)
+                # flatten
+                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+                next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
+                done_batch = done_batch.reshape((-1, 1))
+                # update VAE
+                next_latent = encoder.sample(next_state_batch)[0]
+                latent, mu, log_var = encoder.sample(ae_batch)
+                reconstruct = decoder(latent)
 
-                    # Value loss
-                    newvalue = newvalue.view(-1)
-                    if args.clip_vloss:
-                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                        v_clipped = b_values[mb_inds] + torch.clamp(
-                            newvalue - b_values[mb_inds],
-                            -args.clip_coef,
-                            args.clip_coef,
-                        )
-                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                        v_loss = 0.5 * v_loss_max.mean()
-                    else:
-                        v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                assert encoder.outputs['obs'].shape == reconstruct.shape
+                kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
 
-                    entropy_loss = entropy.mean()
-                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                # adjacent l2 loss
+                adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
+                shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
+                shifted_adjacent_norm = shifted_adjacent_norm.mean()
+                adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
 
-                    # gradient update of encoder and value function
-                    optimizer.zero_grad()
-                    encoder_optim.zero_grad()
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-                    nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                    optimizer.step()
-                    encoder_optim.step()
+                # aggregate
+                loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
 
-                if args.target_kl is not None:
-                    if approx_kl > args.target_kl:
-                        break
+                encoder_optim.zero_grad()
+                decoder_optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+                encoder_optim.step()
+                decoder_optim.step()
 
-        # training variational auto encoder
-        if update % args.vae_update_freq == 0:
-            current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-            ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                    size=(args.ae_batch_size,))
-            ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-            next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
-            next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-            done_batch = done_buffer[ae_indx_batch].to(device)
-            # flatten
-            ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-            next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-            done_batch = done_batch.reshape((-1, 1))
-            # update VAE
-            next_latent = encoder.sample(next_state_batch)[0]
-            latent, mu, log_var = encoder.sample(ae_batch)
-            reconstruct = decoder(latent)
-
-            assert encoder.outputs['obs'].shape == reconstruct.shape
-            kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-            reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-
-            # adjacent l2 loss
-            adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-            shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
-            shifted_adjacent_norm = shifted_adjacent_norm.mean()
-            adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
-
-            # aggregate
-            loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
-
-            encoder_optim.zero_grad()
-            decoder_optim.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-            nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-            encoder_optim.step()
-            decoder_optim.step()
+            if args.target_kl is not None:
+                if approx_kl > args.target_kl:
+                    break
 
         # ===========
         # logging
