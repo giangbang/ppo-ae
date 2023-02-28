@@ -3,4 +3,4 @@ gym[atari]
 autorom[accept-rom-license]
 numpy
 torch
-minigrid
+minigrid==2.0.0
