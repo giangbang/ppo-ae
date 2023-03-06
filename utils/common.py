@@ -247,7 +247,7 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
 
     return thunk
 
-def make_racing_car(env_id, *args, **kwargs):
+def make_racing_car(env_id, seed, *args, **kwargs):
     def thunk():
         env = gym.make(env_id, continuous=False)
         env = gym.wrappers.ResizeObservation(env, 84)
@@ -255,10 +255,10 @@ def make_racing_car(env_id, *args, **kwargs):
         # env = ClipRewardEnv(env)
         env = SkipWrapper(env, 4)
         env = gym.wrappers.FrameStack(env, 4)
-        env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
+    return thunk
 
 def make_env(env_id, *args, **kwargs):
     if "MiniGrid" in env_id:
@@ -267,7 +267,7 @@ def make_env(env_id, *args, **kwargs):
         return make_atari_env(env_id, *args, **kwargs)
     else:
         if "CarRacing" in env_id:
-            return lambda: make_racing_car(env_id)
+            return make_racing_car(env_id, *args, **kwargs)
         return lambda: gym.make(env_id, **kwargs)
 
 class stateRecording:
