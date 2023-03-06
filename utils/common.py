@@ -153,7 +153,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         self.lives = self.env.unwrapped.ale.lives()
         return obs, info
 
-def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None):
+def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None, *args, **kwargs):
     def thunk():
         env = gymnasium.make(env_id)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
