@@ -189,6 +189,44 @@ def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=Fal
 
     return thunk
 
+class ClipRewardEnv(gym.RewardWrapper):
+    """
+    Copied from sb3
+    """
+    def __init__(self, env):
+        gym.RewardWrapper.__init__(self, env)
+
+    def reward(self, reward):
+        """Bin reward to {+1, 0, -1} by its sign."""
+        return np.sign(reward)
+
+class SkipWrapper(gym.Wrapper):
+    """
+    https://github.com/openai/mlsh/blob/master/gym/gym/wrappers/frame_skipping.py
+    Generic common frame skipping wrapper
+    Will perform action for `x` additional steps
+    """
+    def __init__(self, env, repeat_count=4):
+        super().__init__(env)
+        self.repeat_count = repeat_count
+        self.stepcount = 0
+
+    def step(self, action):
+        done = False
+        total_reward = 0
+        current_step = 0
+        while current_step < (self.repeat_count + 1) and not done:
+            self.stepcount += 1
+            obs, reward, truncated, terminated, info = self.env.step(action)
+            total_reward += reward
+            current_step += 1
+            done = truncated or terminated
+        return obs, total_reward, truncated, terminated, info
+
+    def reset(self):
+        self.stepcount = 0
+        return self.env.reset()
+
 def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
     def thunk():
         env = gym.make(env_id)
@@ -200,6 +238,7 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
 
         from gym.wrappers.atari_preprocessing import AtariPreprocessing
         env = AtariPreprocessing(env)
+        env = ClipRewardEnv(env)
         env = gym.wrappers.FrameStack(env, 4)
         env.seed(seed)
         env.action_space.seed(seed)
@@ -208,13 +247,28 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
 
     return thunk
 
+def make_racing_car(env_id, *args, **kwargs):
+    def thunk():
+        env = gym.make(env_id, continuous=False)
+        env = gym.wrappers.ResizeObservation(env, 84)
+        env = gym.wrappers.GrayScaleObservation(env)
+        # env = ClipRewardEnv(env)
+        env = SkipWrapper(env, 4)
+        env = gym.wrappers.FrameStack(env, 4)
+        env.seed(seed)
+        env.action_space.seed(seed)
+        env.observation_space.seed(seed)
+        return env
+
 def make_env(env_id, *args, **kwargs):
     if "MiniGrid" in env_id:
         return make_minigrid_rgb_env(env_id, *args, **kwargs)
     elif kwargs["atari"]:
         return make_atari_env(env_id, *args, **kwargs)
     else:
-        return gym.make(env_id)
+        if "CarRacing" in env_id:
+            return lambda: make_racing_car(env_id)
+        return lambda: gym.make(env_id, **kwargs)
 
 class stateRecording:
     """recording state distributions, for ploting visitation frequency heatmap"""
