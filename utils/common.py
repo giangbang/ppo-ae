@@ -246,6 +246,38 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
         return env
 
     return thunk
+    
+def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
+    def thunk():
+        env = gym.make(env_id)
+        from .atari_wrapper import *
+        env = AtariWrapper(env)
+        env = gym.wrappers.FrameStack(env, 4)
+        env.action_space.seed(seed)
+        env.observation_space.seed(seed)
+        return env
+    return thunk
+
+class AtariWrapperCleanRL(gym.Wrapper):
+    def __init__(self, env):
+        from .atari_wrapper import *
+        env = NoopResetEnv(env, noop_max=30)
+        env = MaxAndSkipEnv(env, skip=4)
+        env = EpisodicLifeEnv(env)
+        if "FIRE" in env.unwrapped.get_action_meanings():
+            env = FireResetEnv(env)
+        env = ClipRewardEnv(env)
+        env = gym.wrappers.ResizeObservation(env, (84, 84))
+        env = gym.wrappers.GrayScaleObservation(env)
+        env = gym.wrappers.FrameStack(env, 4)
+        super().__init__(env)
+
+def make_atari_cleanrl(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
+    def thunk():
+        env = gym.make(env_id)
+        env = AtariWrapperCleanRL(env)
+        return env
+    return thunk
 
 def make_racing_car(env_id, seed, *args, **kwargs):
     def thunk():

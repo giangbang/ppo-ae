@@ -128,6 +128,10 @@ def parse_args():
         help="The size of window on which the distance is calculated")
     parser.add_argument("--reduce", type=str, default="mean",
         help="methods to calculate the intrinsic reward, ")
+        
+    parser.add_argument("--stack-frames", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
+        help="A flag that indicates whether the env is a stacking frame env or not. reconstruction can behave differently if this flag is set")
+    
 
     # visualization of the state distribution
     parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
