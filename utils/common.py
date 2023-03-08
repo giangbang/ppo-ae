@@ -296,7 +296,7 @@ def make_env(env_id, *args, **kwargs):
     if "MiniGrid" in env_id:
         return make_minigrid_rgb_env(env_id, *args, **kwargs)
     elif kwargs["atari"]:
-        return make_atari_env(env_id, *args, **kwargs)
+        return make_atari_cleanrl(env_id, *args, **kwargs)
     else:
         if "CarRacing" in env_id:
             return make_racing_car(env_id, *args, **kwargs)
