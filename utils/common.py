@@ -246,11 +246,12 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
         return env
 
     return thunk
-    
+
+from .atari_wrapper import *
+
 def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
     def thunk():
         env = gym.make(env_id)
-        from .atari_wrapper import *
         env = AtariWrapper(env)
         env = gym.wrappers.FrameStack(env, 4)
         env.action_space.seed(seed)
