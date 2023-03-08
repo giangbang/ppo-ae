@@ -261,7 +261,6 @@ def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwar
 
 class AtariWrapperCleanRL(gym.Wrapper):
     def __init__(self, env):
-        from .atari_wrapper import *
         env = NoopResetEnv(env, noop_max=30)
         env = MaxAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
