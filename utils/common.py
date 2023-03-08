@@ -246,11 +246,12 @@ def make_atari_env(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
         return env
 
     return thunk
-    
+
+from .atari_wrapper import *
+
 def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
     def thunk():
         env = gym.make(env_id)
-        from .atari_wrapper import *
         env = AtariWrapper(env)
         env = gym.wrappers.FrameStack(env, 4)
         env.action_space.seed(seed)
@@ -296,7 +297,7 @@ def make_env(env_id, *args, **kwargs):
     if "MiniGrid" in env_id:
         return make_minigrid_rgb_env(env_id, *args, **kwargs)
     elif kwargs["atari"]:
-        return make_atari_env_sb3(env_id, *args, **kwargs)
+        return make_atari_cleanrl(env_id, *args, **kwargs)
     else:
         if "CarRacing" in env_id:
             return make_racing_car(env_id, *args, **kwargs)
