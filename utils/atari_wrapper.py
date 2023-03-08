@@ -30,11 +30,11 @@ class StickyActionEnv(gym.Wrapper):
         self.action_repeat_probability = action_repeat_probability
         assert env.unwrapped.get_action_meanings()[0] == "NOOP"
 
-    def reset(self, **kwargs) -> GymObs:
+    def reset(self, **kwargs):
         self._sticky_action = 0  # NOOP
         return self.env.reset(**kwargs)
 
-    def step(self, action: int) -> GymStepReturn:
+    def step(self, action: int):
         if self.np_random.random() >= self.action_repeat_probability:
             self._sticky_action = action
         return self.env.step(self._sticky_action)
@@ -165,7 +165,7 @@ class MaxAndSkipEnv(gym.Wrapper):
         self._obs_buffer = np.zeros((2,) + env.observation_space.shape, dtype=env.observation_space.dtype)
         self._skip = skip
 
-    def step(self, action: int) -> GymStepReturn:
+    def step(self, action: int):
         """
         Step the environment with the given action
         Repeat action, sum reward, and max over last observations.
