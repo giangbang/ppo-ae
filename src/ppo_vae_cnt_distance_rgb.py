@@ -117,6 +117,9 @@ def parse_args():
     parser.add_argument("--save-final-buffer", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Save the buffer at the end of training")
 
+    parser.add_argument("--vae-training-freq", type=int, default=2,
+        help="Traing VAE after every env steps")
+
     # intrinsic learning parameters
     parser.add_argument("--rw-coef", type=float, default=0.1,
         help="coefficient for intrinsic reward")
@@ -620,47 +623,49 @@ if __name__ == "__main__":
                 optimizer.step()
                 encoder_optim.step()
 
-                # training variational auto encoder
-                current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
-                ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
-                                        size=(args.ae_batch_size,))
-                ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-                next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
-                next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-                done_batch = done_buffer[ae_indx_batch].to(device)
-                # flatten
-                ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
-                next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-                done_batch = done_batch.reshape((-1, 1))
-                # update VAE
-                next_latent = encoder.sample(next_state_batch)[0]
-                latent, mu, log_var = encoder.sample(ae_batch)
-                reconstruct = decoder(latent)
-
-                assert encoder.outputs['obs'].shape == reconstruct.shape
-                kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-                reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
-
-                # adjacent l2 loss
-                adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-                shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
-                shifted_adjacent_norm = shifted_adjacent_norm.mean()
-                adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
-
-                # aggregate
-                loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
-
-                encoder_optim.zero_grad()
-                decoder_optim.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                encoder_optim.step()
-                decoder_optim.step()
-
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
+
+        if (global_step // args.num_envs) % args.vae_training_freq == 0:
+            
+            # training variational auto encoder
+            current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
+            ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
+                                    size=(args.ae_batch_size,))
+            ae_batch = buffer_ae[ae_indx_batch].float().to(device)
+            next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
+            next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
+            done_batch = done_buffer[ae_indx_batch].to(device)
+            # flatten
+            ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
+            next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
+            done_batch = done_batch.reshape((-1, 1))
+            # update VAE
+            next_latent = encoder.sample(next_state_batch)[0]
+            latent, mu, log_var = encoder.sample(ae_batch)
+            reconstruct = decoder(latent)
+
+            assert encoder.outputs['obs'].shape == reconstruct.shape
+            kl_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+            reconstruct_loss = torch.nn.functional.mse_loss(reconstruct, encoder.outputs['obs'])
+
+            # adjacent l2 loss
+            adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
+            shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
+            shifted_adjacent_norm = shifted_adjacent_norm.mean()
+            adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
+
+            # aggregate
+            loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
+
+            encoder_optim.zero_grad()
+            decoder_optim.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
+            nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
+            encoder_optim.step()
+            decoder_optim.step()
 
         # ===========
         # logging
@@ -705,28 +710,30 @@ if __name__ == "__main__":
                 writer.add_figure("state_distribution/heatmap",
                         record_state.get_figure_log_scale(), global_step)
 
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        try:
+            y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+            var_y = np.var(y_true)
+            explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        # print("SPS:", int(global_step / (time.time() - start_time)))
-        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+            # TRY NOT TO MODIFY: record rewards for plotting purposes
+            writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+            writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+            writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+            writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+            writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
+            writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+            writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+            writer.add_scalar("losses/explained_variance", explained_var, global_step)
+            # print("SPS:", int(global_step / (time.time() - start_time)))
+            writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
-        # log some more info from VAE
-        writer.add_scalar("VAE/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
-        writer.add_scalar("VAE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
-        writer.add_scalar("VAE/loss", loss.item(), global_step)
-        writer.add_scalar("VAE/reconstruct_loss", reconstruct_loss.item(), global_step)
-
+            # log some more info from VAE
+            writer.add_scalar("VAE/adjacent_norm", adjacent_norm.mean().detach().item(), global_step)
+            writer.add_scalar("VAE/clipped_adjacent_norm", shifted_adjacent_norm.item(), global_step)
+            writer.add_scalar("VAE/loss", loss.item(), global_step)
+            writer.add_scalar("VAE/reconstruct_loss", reconstruct_loss.item(), global_step)
+        except:
+            pass
 
         # log intrinsic rewards
         if global_step > args.ae_warmup_steps:
