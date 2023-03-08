@@ -134,6 +134,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         :param kwargs: Extra keywords passed to env.reset() call
         :return: the first observation of the environment
         """
+        info = {}
         if self.was_real_done:
             obs = self.env.reset(**kwargs)
         else:
