@@ -252,6 +252,7 @@ from .atari_wrapper import *
 def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwargs):
     def thunk():
         env = gym.make(env_id)
+        env = gym.wrappers.RecordEpisodeStatistics(env)
         env = AtariWrapper(env)
         env = gym.wrappers.FrameStack(env, 4)
         env.action_space.seed(seed)
@@ -261,6 +262,7 @@ def make_atari_env_sb3(env_id, seed, idx, capture_video, run_name, *args, **kwar
 
 class AtariWrapperCleanRL(gym.Wrapper):
     def __init__(self, env):
+        env = gym.wrappers.RecordEpisodeStatistics(env)
         env = NoopResetEnv(env, noop_max=30)
         env = MaxAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
