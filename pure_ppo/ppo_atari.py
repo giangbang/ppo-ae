@@ -205,15 +205,7 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
-            if "final_info" in info:
-                ep_returns, ep_lengths = [], []
-                for inf in info["final_info"]:
-                    if isinstance(inf, dict):
-                        ep_returns.append(inf["episode"]["r"])
-                        ep_lengths.append(inf["episode"]["l"])
-                        # print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
-                writer.add_scalar("charts/episodic_return", np.mean(ep_returns).item(), global_step)
-                writer.add_scalar("charts/episodic_length", np.mean(ep_lengths).item(), global_step)
+            log_returns(writer, info, global_step)
 
             for item in info:
                 if "episode" == item:

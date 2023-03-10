@@ -467,3 +467,17 @@ def pprint(dict_data):
         print(format_str.format(str(k), str(v)))
 
     print(hbar)
+
+def log_returns(writers, infobuffer, global_step):
+    if "final_info" in info:
+        ep_returns, ep_lengths = [], []
+        for inf in info["final_info"]:
+            if isinstance(inf, dict):
+                try:
+                    ep_returns.append(inf["episode"]["r"])
+                    ep_lengths.append(inf["episode"]["l"])
+                except:
+                    pass
+        if len(ep_returns) > 0:
+            writer.add_scalar("train/episodic_return", np.mean(ep_returns).item(), global_step)
+            writer.add_scalar("train/episodic_length", np.mean(ep_lengths).item(), global_step)
