@@ -129,8 +129,9 @@ if __name__ == "__main__":
                 goal_obs.append(real_next_obs) # observation of the goal position
                 goal_coord.append(find_goal(envs.envs[0]))
 
-    print(len(goal_obs))
-    print(goal_coord)
+    print("Number of time reaching goal", len(goal_obs))
+    for i in range(1, len(goal_coord), 1):
+        assert goal_coord[i] == goal_coord[0]
     # calculate distances
     distances = ((goal_embeddings[0].to(device) - embeddings)**2).sum(dim=-1).sqrt()
     distance_grid = np.zeros(record_state.shape, dtype=np.float32)
@@ -138,8 +139,9 @@ if __name__ == "__main__":
 
     for dis, coord in zip(distances, obs_coord):
         # print(dis, coord)
-        distance_grid[coord[-2:]] += dis.item()
-        count_grid[coord[-2:]] += 1
+        coord = coord.squeeze()
+        distance_grid[coord[0], coord[1]] += dis.item()
+        count_grid[coord[0], coord[1]] += 1
 
     distance_grid_avg = distance_grid / count_grid
     record_state.distance_grid = distance_grid_avg
