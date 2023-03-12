@@ -46,6 +46,13 @@ def get_figure(self):
 
 stateRecording.get_distance_plot = get_figure
 
+def find_goal(env):
+    for j in range(env.grid.height):
+        for i in range(env.grid.width):
+            c = env.grid.get(i, j)
+            if c is not None and c.type == "goal":
+                return (j, i)
+
 if __name__ == "__main__":
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
@@ -75,11 +82,51 @@ if __name__ == "__main__":
     encoder.load_state_dict(checkpoint["encoder"], map_location=device)
 
     obs = torch.zeros((args.total_timesteps, 1) + envs.single_observation_space.shape).to(device)
+    embeddings = torch.zeros((args.total_timesteps, 1, ae_dim)).to(device)
     obs_coord = torch.zeros((args.total_timesteps, 1) + 2).to(device)
     goal_obs = []
+    goal_embeddings = []
     goal_coord = []
 
     global_step = 0
     start_time = time.time()
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
+
+    record_state = stateRecording(envs.envs[0])
+
+    for global_step in range(args.total_timesteps):
+        obs[global_step] = next_obs # current observation
+        obs_coord[global_step] = np.array(env.agent_pos).reshape(obs_coord[global_step].shape)
+        with torch.no_grad():
+            next_embedding = encoder.sample(next_obs, deterministic=True)[0]
+            action, _, _, _ = agent.get_action_and_value(next_embedding)
+            embeddings[global_step] = next_embedding
+
+        next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+        done = np.bitwise_or(terminated, truncated)
+        next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+        for i, d in enumerate(done):
+            if d and np.sum(reward) > 0.05: # success to reach goal
+                # get the position of the real goal
+                real_next_obs = info["terminal_observation"]
+                with torch.no_grad():
+                    real_next_obs = torch.Tensor(real_next_obs).to(device)
+                    g_embedding = encoder.sample(real_next_obs, deterministic=True)[0]
+                goal_embeddings.append(g_embedding.cpu())
+                goal_obs.append(real_next_obs) # observation of the goal position
+                goal_coord.append(find_goal(envs.envs[0]))
+
+    print(len(goal_obs))
+    # calculate distances
+    distances = ((goal_embeddings[0].to(device) - embeddings)**2).sum(dim=-1).sqrt()
+    distance_grid = np.zeros(record_state.shape, dtype=np.float32)
+    count_grid = np.zeros(record_state.shape, dtype=int)
+    for dis, coord in zip(distances, obs_coord):
+        distance_grid[coord[-2:]] += dis
+        count_grid[coord[-2:]] += 1
+
+    distance_grid_avg = distance_grid / count_grid
+    record_state.distance_grid = distance_grid_avg
+    record_state.get_distance_plot()
+    plt.savefig("distance.png")
