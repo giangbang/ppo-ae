@@ -58,7 +58,14 @@ def find_goal(env):
         for i in range(env.grid.width):
             c = env.grid.get(i, j)
             if c is not None and c.type == "goal":
-                return (j, i)
+                return (i, j)
+
+class restartAt(gym.Wrapper):
+    def reset(self, start=None, goal=None, *args, **kwargs):
+        print(self.env.unwrapped._agent_default_pos)
+        self.env.unwrapped._agent_default_pos = start
+        self.env.unwrapped._goal_default_pos = goal
+        return super().reset(*args, **kwargs)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -106,44 +113,55 @@ if __name__ == "__main__":
     record_state = stateRecording(envs.envs[0])
     import cv2
     cv2.imwrite("env_obs.png", next_obs.cpu().squeeze().permute([1,2,0]).numpy().astype(np.uint8))
+    env = envs.envs[0]
+    env = restartAt(env)
+    goal = find_goal(env)
+    agent_goal = (goal[0]-1, goal[1])
+    env.reset(agent_goal, goal)
+    for i in range(4):
+        obs, _, _, _, _ = env.step(0)
+        obs = np.transpose(obs, (1,2,0))
+        plt.imshow(obs)
+        plt.savefig(f"{i}.png")
 
-    for global_step in range(args.total_timesteps):
-        # obs[global_step] = next_obs # current observation
-        obs_coord[global_step] = torch.Tensor(np.array(envs.envs[0].agent_pos).reshape(obs_coord[global_step].shape)).to(device)
-        with torch.no_grad():
-            next_embedding = encoder.sample(next_obs, deterministic=True)[0]
-            action, _, _, _ = agent.get_action_and_value(next_embedding)
-            embeddings[global_step] = next_embedding
 
-        next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
-        done = np.bitwise_or(terminated, truncated)
-        next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-        for i, d in enumerate(done):
-            if d and np.sum(reward) > 0.05: # success to reach goal
-                # get the position of the real goal
-                real_next_obs = info["final_observation"][0]
-                with torch.no_grad():
-                    real_next_obs = torch.Tensor(real_next_obs).to(device).unsqueeze(0)
-                    g_embedding = encoder.sample(real_next_obs, deterministic=True)[0]
-                goal_embeddings.append(g_embedding.cpu())
-                goal_obs.append(real_next_obs) # observation of the goal position
-                goal_coord.append(find_goal(envs.envs[0]))
+    # for global_step in range(args.total_timesteps):
+    #     # obs[global_step] = next_obs # current observation
+    #     obs_coord[global_step] = torch.Tensor(np.array(envs.envs[0].agent_pos).reshape(obs_coord[global_step].shape)).to(device)
+    #     with torch.no_grad():
+    #         next_embedding = encoder.sample(next_obs, deterministic=True)[0]
+    #         action, _, _, _ = agent.get_action_and_value(next_embedding)
+    #         embeddings[global_step] = next_embedding
 
-    print("Number of time reaching goal", len(goal_obs))
-    for i in range(1, len(goal_coord), 1):
-        assert goal_coord[i] == goal_coord[0]
-    # calculate distances
-    distances = ((goal_embeddings[0].to(device) - embeddings)**2).sum(dim=-1).sqrt()
-    distance_grid = np.zeros(record_state.shape, dtype=np.float32)
-    count_grid = np.zeros(record_state.shape, dtype=np.float32) + 1e-5
+    #     next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+    #     done = np.bitwise_or(terminated, truncated)
+    #     next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+    #     for i, d in enumerate(done):
+    #         if d and np.sum(reward) > 0.05: # success to reach goal
+    #             # get the position of the real goal
+    #             real_next_obs = info["final_observation"][0]
+    #             with torch.no_grad():
+    #                 real_next_obs = torch.Tensor(real_next_obs).to(device).unsqueeze(0)
+    #                 g_embedding = encoder.sample(real_next_obs, deterministic=True)[0]
+    #             goal_embeddings.append(g_embedding.cpu())
+    #             goal_obs.append(real_next_obs) # observation of the goal position
+    #             goal_coord.append(find_goal(envs.envs[0]))
 
-    for dis, coord in zip(distances, obs_coord):
-        # print(dis, coord)
-        coord = coord.squeeze()
-        distance_grid[coord[0], coord[1]] += dis.item()
-        count_grid[coord[0], coord[1]] += 1
+    # print("Number of time reaching goal", len(goal_obs))
+    # for i in range(1, len(goal_coord), 1):
+    #     assert goal_coord[i] == goal_coord[0]
+    # # calculate distances
+    # distances = ((goal_embeddings[0].to(device) - embeddings)**2).sum(dim=-1).sqrt()
+    # distance_grid = np.zeros(record_state.shape, dtype=np.float32)
+    # count_grid = np.zeros(record_state.shape, dtype=np.float32) + 1e-5
 
-    distance_grid_avg = distance_grid / count_grid
-    record_state.distance_grid = distance_grid_avg
-    record_state.get_distance_plot(goal_coord[0])
-    plt.savefig("distance.png")
+    # for dis, coord in zip(distances, obs_coord):
+    #     # print(dis, coord)
+    #     coord = coord.squeeze()
+    #     distance_grid[coord[0], coord[1]] += dis.item()
+    #     count_grid[coord[0], coord[1]] += 1
+
+    # distance_grid_avg = distance_grid / count_grid
+    # record_state.distance_grid = distance_grid_avg
+    # record_state.get_distance_plot(goal_coord[0])
+    # plt.savefig("distance.png")
