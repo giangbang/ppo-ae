@@ -131,10 +131,10 @@ def parse_args():
         help="The size of window on which the distance is calculated")
     parser.add_argument("--reduce", type=str, default="mean",
         help="methods to calculate the intrinsic reward, ")
-        
+
     parser.add_argument("--stack-frames", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="A flag that indicates whether the env is a stacking frame env or not. reconstruction can behave differently if this flag is set")
-    
+
 
     # visualization of the state distribution
     parser.add_argument("--visualize-states", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
@@ -412,6 +412,8 @@ if __name__ == "__main__":
 
     buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
                 dtype=torch.uint8)
+    next_obs_buffer_ae = torch.zeros((args.ae_buffer_size, args.num_envs) + envs.single_observation_space.shape,
+                dtype=torch.uint8)
     done_buffer = torch.zeros((args.ae_buffer_size, args.num_envs, 1), dtype=torch.bool)
     buffer_ae_indx = 0
     ae_buffer_is_full = False
@@ -466,9 +468,6 @@ if __name__ == "__main__":
             buffer_ae[buffer_ae_indx] = next_obs.cpu()
             done_buffer[buffer_ae_indx] = next_done.cpu().reshape(done_buffer[buffer_ae_indx].shape)
 
-            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
-            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
-
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
@@ -494,6 +493,15 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1) * args.reward_scale
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
+            # handle `terminal_observation`
+            real_next_obs = next_obs.copy()
+            for idx, d in enumerate(done):
+                if d:
+                    real_next_obs[idx] = infos["final_observation"][idx]
+            next_obs_buffer_ae[buffer_ae_indx] = real_next_obs
+
+            buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
+            ae_buffer_is_full = ae_buffer_is_full or buffer_ae_indx == 0
 
             # intrinsic rewards
             if global_step > args.ae_warmup_steps:
@@ -628,19 +636,20 @@ if __name__ == "__main__":
                     break
 
         if (global_step // args.num_envs) % args.vae_training_freq == 0:
-            
+
             # training variational auto encoder
             current_ae_buffer_size = args.ae_buffer_size if ae_buffer_is_full else buffer_ae_indx
             ae_indx_batch = torch.randint(low=0, high=current_ae_buffer_size,
                                     size=(args.ae_batch_size,))
             ae_batch = buffer_ae[ae_indx_batch].float().to(device)
-            next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
-            next_state_batch = buffer_ae[next_state_indx_batch].float().to(device)
-            done_batch = done_buffer[ae_indx_batch].to(device)
+            # next_state_indx_batch = (ae_indx_batch + 1) % current_ae_buffer_size
+            next_state_indx_batch = ae_indx_batch
+            next_state_batch = next_obs_buffer_ae[next_state_indx_batch].float().to(device)
+            # done_batch = done_buffer[ae_indx_batch].to(device)
             # flatten
             ae_batch = ae_batch.reshape((-1,) + envs.single_observation_space.shape)
             next_state_batch = next_state_batch.reshape((-1,) + envs.single_observation_space.shape)
-            done_batch = done_batch.reshape((-1, 1))
+            # done_batch = done_batch.reshape((-1, 1))
             # update VAE
             next_latent = encoder.sample(next_state_batch)[0]
             latent, mu, log_var = encoder.sample(ae_batch)
@@ -652,7 +661,7 @@ if __name__ == "__main__":
 
             # adjacent l2 loss
             adjacent_norm = torch.norm(latent-next_latent, keepdim=True, dim=-1)
-            shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()*(~done_batch)
+            shifted_adjacent_norm = (adjacent_norm-args.distance_clip).clip(min=0).square()
             shifted_adjacent_norm = shifted_adjacent_norm.mean()
             adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
 
