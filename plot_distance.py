@@ -60,20 +60,6 @@ def find_goal(env):
             if c is not None and c.type == "goal":
                 return (j, i)
 
-def randomStart(gym.Wrapper):
-    """
-    Random start for minigrid fourroom, still keep the layout the same
-    """
-    def reset(self, **kwargs):
-        obs, _ = super().reset(**kwargs)
-        seed = np.random.randint(low=0)
-        from gym.utils import seeding
-        # reset seed to a new seed
-        self.env._np_random, seed = seeding.np_random(seed)
-        self.env.place_agent()
-        obs = self.env.gen_obs()
-        return obs, {}
-
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -87,10 +73,9 @@ if __name__ == "__main__":
 
     envs = [
         make_env(args.env_id, args.seed + i, i, 0,
-        run_name, reseed=args.fixed_seed, atari=False, random_start=True)
+        run_name, reseed=args.fixed_seed, atari=False)
         for i in range(1)
     ]
-    envs[0] = randomStart(envs[0])
     import gym
     envs = gym.vector.SyncVectorEnv(
         envs

@@ -168,11 +168,9 @@ class randomStartWrapper(gym.Wrapper):
         obs = self.env.gen_obs()
         return obs, {}
 
-def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None, random_start=False, *args, **kwargs):
+def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None, *args, **kwargs):
     def thunk():
         env = gymnasium.make(env_id)
-        if random_start:
-            env = randomStartWrapper(env)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
         from gym.wrappers import ResizeObservation
         env = RGBImgObsWrapper(env)
