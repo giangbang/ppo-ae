@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
     envs = [
         make_env(args.env_id, args.seed + i, i, 0,
-        run_name, reseed=args.fixed_seed, atari=False)
+        run_name, reseed=args.fixed_seed, atari=False, random_start=True)
         for i in range(1)
     ]
     envs[0] = randomStart(envs[0])

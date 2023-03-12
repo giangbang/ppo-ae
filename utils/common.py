@@ -153,9 +153,26 @@ class EpisodicLifeEnv(gym.Wrapper):
         self.lives = self.env.unwrapped.ale.lives()
         return obs, info
 
-def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None, *args, **kwargs):
+class randomStartWrapper(gym.Wrapper):
+    """
+    Random start for minigrid fourroom, still keep the layout the same
+    """
+
+    def reset(self, **kwargs):
+        obs, _ = super().reset(**kwargs)
+        seed = np.random.randint(low=0)
+        from gym.utils import seeding
+        # reset seed to a new seed
+        self.env._np_random, seed = seeding.np_random(seed)
+        self.env.place_agent()
+        obs = self.env.gen_obs()
+        return obs, {}
+
+def make_minigrid_rgb_env(env_id, seed, idx, capture_video, run_name, reseed=False, restrict_action:int=None, random_start=False, *args, **kwargs):
     def thunk():
         env = gymnasium.make(env_id)
+        if random_start:
+            env = randomStartWrapper(env)
         from minigrid.wrappers import ImgObsWrapper,FlatObsWrapper, RGBImgObsWrapper
         from gym.wrappers import ResizeObservation
         env = RGBImgObsWrapper(env)
