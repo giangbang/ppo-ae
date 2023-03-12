@@ -469,7 +469,7 @@ def pprint(dict_data):
     print(hbar)
 
 def log_returns(writers, infobuffer, global_step):
-    if "final_info" in info:
+    if "final_info" in infobuffer:
         ep_returns, ep_lengths = [], []
         for inf in info["final_info"]:
             if isinstance(inf, dict):
