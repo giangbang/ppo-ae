@@ -127,6 +127,8 @@ def parse_args():
         help="Warmup phase for VAE, intrinsic rewards are not consider in this period")
     parser.add_argument("--distance-clip", type=float, default=0.1,
         help="cliping distance theshold in objective")
+    parser.add_argument("--reconstruct-loss-coef", type=float, default=100,
+        help="reconstruction coefficient in objective")
     parser.add_argument("--window-size-episode", type=int, default=300,
         help="The size of window on which the distance is calculated")
     parser.add_argument("--reduce", type=str, default="mean",
@@ -666,7 +668,7 @@ if __name__ == "__main__":
             adjacent_loss = args.adjacent_norm_coef * shifted_adjacent_norm
 
             # aggregate
-            loss = adjacent_loss + reconstruct_loss + args.beta*kl_loss
+            loss = adjacent_loss + args.reconstruct_loss_coef * reconstruct_loss + args.beta*kl_loss
 
             encoder_optim.zero_grad()
             decoder_optim.zero_grad()
