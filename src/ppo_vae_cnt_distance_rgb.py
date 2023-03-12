@@ -497,7 +497,7 @@ if __name__ == "__main__":
             real_next_obs = next_obs.clone()
             for idx, d in enumerate(done):
                 if d:
-                    real_next_obs[idx] = infos["final_observation"][idx]
+                    real_next_obs[idx] = torch.Tensor(info["final_observation"][idx]).to(device)
             next_obs_buffer_ae[buffer_ae_indx] = real_next_obs
 
             buffer_ae_indx = (buffer_ae_indx + 1) % args.ae_buffer_size
