@@ -494,7 +494,7 @@ if __name__ == "__main__":
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
             # handle `terminal_observation`
-            real_next_obs = next_obs.copy()
+            real_next_obs = next_obs.clone()
             for idx, d in enumerate(done):
                 if d:
                     real_next_obs[idx] = infos["final_observation"][idx]
