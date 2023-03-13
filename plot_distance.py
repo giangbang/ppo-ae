@@ -46,23 +46,22 @@ def get_figure(self, goal_pos=None):
     # overlay goal
     if goal_pos is not None:
         goal = np.zeros(self.distance_grid.shape + (4,), dtype=np.uint8)
-        goal[goal_pos+ (1,)] = 255
-        goal[goal_pos+ (3,)] = 255
+        goal[goal_pos[0], goal_pos[1], 1] = 255
+        goal[goal_pos[0], goal_pos[1], 3] = 255
         plt.imshow(goal)
     return plt.gcf()
 
 stateRecording.get_distance_plot = get_figure
 
 def find_goal(env):
-    for j in range(env.grid.height):
-        for i in range(env.grid.width):
+    for i in range(env.grid.height):
+        for j in range(env.grid.width):
             c = env.grid.get(i, j)
             if c is not None and c.type == "goal":
                 return (i, j)
 
 class restartAt(gym.Wrapper):
     def reset(self, start=None, goal=None, *args, **kwargs):
-        print(self.env.unwrapped._agent_default_pos)
         self.env.unwrapped._agent_default_pos = start
         self.env.unwrapped._goal_default_pos = goal
         return super().reset(*args, **kwargs)
@@ -99,31 +98,77 @@ if __name__ == "__main__":
     encoder.load_state_dict(checkpoint["encoder"])
 
     # obs = torch.zeros((args.total_timesteps, 1) + envs.single_observation_space.shape).to(device)
-    embeddings = torch.zeros((args.total_timesteps, 1, ae_dim)).to(device)
-    obs_coord = torch.zeros((args.total_timesteps, 1, 2), dtype=int).to(device)
+    # embeddings = torch.zeros((args.total_timesteps, 1, ae_dim)).to(device)
+    # obs_coord = torch.zeros((args.total_timesteps, 1, 2), dtype=int).to(device)
     goal_obs = []
-    goal_embeddings = []
-    goal_coord = []
 
-    global_step = 0
-    start_time = time.time()
-    next_obs = torch.Tensor(envs.reset()[0]).to(device)
-    next_done = torch.zeros(1).to(device)
-
-    record_state = stateRecording(envs.envs[0])
     import cv2
-    cv2.imwrite("env_obs.png", next_obs.cpu().squeeze().permute([1,2,0]).numpy().astype(np.uint8))
     env = envs.envs[0]
     env = restartAt(env)
+    obs, _ = env.reset()
+    obs = np.transpose(obs, (1,2,0)).astype(np.uint8)
+    cv2.imwrite("before_env_obs.png", obs)
+
     goal = find_goal(env)
+    print("position of goal", goal)
     agent_goal = (goal[0]-1, goal[1])
-    env.reset(agent_goal, goal)
+    obs, _ = env.reset(agent_goal, goal)
+    record_state = stateRecording(env)
+    obs = np.transpose(obs, (1,2,0)).astype(np.uint8)
+    cv2.imwrite("after_env_obs.png", obs)
+
+    gembedding = []
     for i in range(4):
         obs, _, _, _, _ = env.step(0)
+        goal_obs.append(obs)
         obs = np.transpose(obs, (1,2,0))
         plt.imshow(obs)
         plt.savefig(f"{i}.png")
 
+    with torch.no_grad():
+        for i, gobs in enumerate(goal_obs):
+            gobs = torch.Tensor(gobs).unsqueeze(0).to(device)
+            gembedding.append(encoder.sample(gobs, deterministic=True)[0])
+    print("shape of the single view goal encoding", gembedding[0].shape)
+    gembedding = torch.concatenate(gembedding, dim=0)
+    print("shape of all views goal encoding", gembedding.shape)
+
+    import copy 
+    grid = copy.deepcopy(env.grid)
+
+    distance_grid = np.zeros(record_state.shape, dtype=np.float32)
+    mask = np.zeros(record_state.shape, dtype=int)
+    for i in range(grid.height):
+        for j in range(grid.width):
+            if (i, j) == goal: continue
+            c = grid.get(i, j)
+            if c is None:
+                obs_allviews = []
+                position = (i, j)
+                env.reset(position, goal)
+                for _ in range(4):
+                    obs, _, _, _, _ = env.step(0)
+                    agent_position = env.agent_pos
+                    
+                    obs = torch.Tensor(obs).unsqueeze(0).to(device)
+                    obs_allviews.append(obs)
+
+                obs_allviews = torch.cat(obs_allviews, dim=0)
+                with torch.no_grad():
+                    embeddings = encoder.sample(obs_allviews, deterministic=True)[0]
+                assert embeddings.shape == gembedding.shape
+                distances = (embeddings.unsqueeze(0) - gembedding.unsqueeze(1))**2
+                distances = distances.sum(-1).sqrt().mean().item()
+
+                distance_grid[position[0], position[1]] = distances
+
+                mask[position[0], position[1]] = 1
+    record_state.distance_grid = distance_grid
+    record_state.get_distance_plot(goal)
+    plt.savefig("distance.png")
+    plt.imshow(mask)
+    # save mask for debugging
+    plt.savefig("mask.png")
 
     # for global_step in range(args.total_timesteps):
     #     # obs[global_step] = next_obs # current observation

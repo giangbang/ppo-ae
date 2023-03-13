@@ -283,7 +283,7 @@ class AtariWrapperCleanRL(gym.Wrapper):
         env = EpisodicLifeEnv(env)
         if "FIRE" in env.unwrapped.get_action_meanings():
             env = FireResetEnv(env)
-        # env = ClipRewardEnv(env)
+        env = ClipRewardEnv(env)
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayScaleObservation(env)
         env = gym.wrappers.FrameStack(env, 4)
@@ -383,11 +383,11 @@ class stateRecording:
     def extract_mask(self, env):
         """ Extract walls from grid_env, used for masking wall cells in heatmap """
         self.mask = np.zeros_like(self.count)
-        for j in range(env.grid.height):
-            for i in range(env.grid.width):
+        for i in range(env.grid.height):
+            for j in range(env.grid.width):
                 c = env.grid.get(i, j)
                 if c is not None and c.type=="wall":
-                    self.mask[j, i]=1
+                    self.mask[i, j]=1
 
     def save_to(self, file_path):
         with open(file_path, 'wb') as f:
