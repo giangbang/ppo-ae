@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 import random
 from utils.common import *
-from src.ppo_vae_cnt_distance_rgb import PixelEncoder, Agent
+from src.ppo_vae_cnt_distance_rgb import PixelEncoder, Agent, PixelDecoder
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -64,7 +64,9 @@ class restartAt(gym.Wrapper):
     def reset(self, start=None, goal=None, *args, **kwargs):
         self.env.unwrapped._agent_default_pos = start
         self.env.unwrapped._goal_default_pos = goal
-        return super().reset(*args, **kwargs)
+        obs, info = super().reset(*args, **kwargs)
+        self.env.unwrapped.agent_pos = start
+        return obs, info
 
 if __name__ == "__main__":
     args = parse_args()
@@ -95,7 +97,9 @@ if __name__ == "__main__":
     agent = Agent(envs, obs_shape=ae_dim)
     agent.load_state_dict(checkpoint["agent"])
     encoder = PixelEncoder(envs.single_observation_space.shape, ae_dim)
+    decoder = PixelDecoder(envs.single_observation_space.shape, ae_dim)
     encoder.load_state_dict(checkpoint["encoder"])
+    decoder.load_state_dict(checkpoint["decoder"])
 
     # obs = torch.zeros((args.total_timesteps, 1) + envs.single_observation_space.shape).to(device)
     # embeddings = torch.zeros((args.total_timesteps, 1, ae_dim)).to(device)
@@ -138,8 +142,12 @@ if __name__ == "__main__":
         for i, gobs in enumerate(goal_obs):
             gobs = torch.Tensor(gobs).unsqueeze(0).to(device)
             gembedding.append(encoder.sample(gobs, deterministic=True)[0])
+        gembedding = torch.concatenate(gembedding, dim=0)
+        greconstruct = decoder(gembedding).permute([0, 2,3,1])*128+128
+    for i, reconstruc in enumerate(greconstruct):
+        plt.imshow(reconstruc.numpy().clip(0,255).astype(np.uint8))
+        plt.savefig(f"_reconstruct_{i}.png")
     print("shape of the single view goal encoding", gembedding[0].shape)
-    gembedding = torch.concatenate(gembedding, dim=0)
     print("shape of all views goal encoding", gembedding.shape)
 
     import copy 
@@ -154,10 +162,13 @@ if __name__ == "__main__":
             if c is None:
                 obs_allviews = []
                 position = (i, j)
+                print(position)
                 env.reset(position, goal)
                 for _ in range(4):
                     obs, _, _, _, _ = env.step(0)
-                    agent_position = env.agent_pos
+                    # plt.imshow(obs.transpose((1,2,0)))
+                    # plt.savefig("asf"+str(np.random.randint(0, 2222))+".png")
+                    # agent_position = env.agent_pos
                     
                     obs = torch.Tensor(obs).unsqueeze(0).to(device)
                     obs_allviews.append(obs)
@@ -172,6 +183,7 @@ if __name__ == "__main__":
                 distance_grid[position[0], position[1]] = distances
 
                 mask[position[0], position[1]] = 1
+    print(position)
     mask[agent_goal[0], agent_goal[1]] = 0.5
     record_state.distance_grid = distance_grid
     record_state.get_distance_plot(goal)
@@ -179,6 +191,16 @@ if __name__ == "__main__":
     plt.imshow(mask)
     # save mask for debugging
     plt.savefig("mask.png")
+    with torch.no_grad():
+        reconstruct = decoder(embeddings).permute([0, 2,3,1])*128+128
+    for i, reconstruc in enumerate(reconstruct):
+        plt.imshow(reconstruc.numpy().clip(0,255).astype(np.uint8))
+        plt.savefig(f"_reconstruct_embedding_{i}.png")
+    obs_allviews = obs_allviews.permute([0, 2, 3, 1]).numpy().clip(0, 255).astype(np.uint8)
+    for i, obs in enumerate(obs_allviews):
+        plt.imshow(obs)
+        plt.savefig(f"obs_{i}.png")
+
 
     # for global_step in range(args.total_timesteps):
     #     # obs[global_step] = next_obs # current observation
