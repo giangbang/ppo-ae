@@ -33,7 +33,7 @@ def get_figure(self, goal_pos=None):
     import matplotlib.ticker as ticker
     plt.clf()
     plt.jet()
-    plt.imshow(self.distance_grid, cmap="GnBu", vmin=0)
+    plt.imshow(self.distance_grid.transpose(), cmap="GnBu", vmin=0)
     cbar=plt.colorbar()
     # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
     cbar.update_ticks()
@@ -41,14 +41,14 @@ def get_figure(self, goal_pos=None):
 
     # over lay walls
     plt.imshow(np.zeros_like(self.distance_grid, dtype=np.uint8),
-            cmap="gray", alpha=self.mask.astype(float),
+            cmap="gray", alpha=self.mask.astype(float).transpose(),
             vmin=0, vmax=1)
     # overlay goal
     if goal_pos is not None:
         goal = np.zeros(self.distance_grid.shape + (4,), dtype=np.uint8)
         goal[goal_pos[0], goal_pos[1], 1] = 255
         goal[goal_pos[0], goal_pos[1], 3] = 255
-        plt.imshow(goal)
+        plt.imshow(goal.transpose((1,0,2)))
     return plt.gcf()
 
 stateRecording.get_distance_plot = get_figure
@@ -173,9 +173,11 @@ if __name__ == "__main__":
 
                 mask[position[0], position[1]] = 1
     mask[agent_goal[0], agent_goal[1]] = 0.5
-    record_state.distance_grid = distance_grid
+    record_state.distance_grid = distance_grid/np.max(distance_grid)
     record_state.get_distance_plot(goal)
-    plt.savefig("distance.png")
+    plt.xticks([])
+    plt.yticks([])
+    plt.savefig(f"{args.env_id}.png", dpi=400)
     plt.imshow(mask)
     # save mask for debugging
     plt.savefig("mask.png")

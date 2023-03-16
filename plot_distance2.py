@@ -28,12 +28,12 @@ def parse_args():
     args, unknown = parser.parse_known_args()
     return args
 
-def get_figure(self, goal_pos=None):
+def get_figure(self, goal_pos=None, agent_pos=None):
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
     plt.clf()
     plt.jet()
-    plt.imshow(self.distance_grid, cmap="GnBu", vmin=0)
+    plt.imshow(self.distance_grid.transpose(), cmap="GnBu", vmin=0)
     cbar=plt.colorbar()
     # cbar.ax.yaxis.set_major_locator(ticker.FixedLocator(lin_spc))
     cbar.update_ticks()
@@ -41,14 +41,19 @@ def get_figure(self, goal_pos=None):
 
     # over lay walls
     plt.imshow(np.zeros_like(self.distance_grid, dtype=np.uint8),
-            cmap="gray", alpha=self.mask.astype(float),
+            cmap="gray", alpha=self.mask.astype(float).transpose(),
             vmin=0, vmax=1)
     # overlay goal
     if goal_pos is not None:
         goal = np.zeros(self.distance_grid.shape + (4,), dtype=np.uint8)
         goal[goal_pos[0], goal_pos[1], 1] = 255
         goal[goal_pos[0], goal_pos[1], 3] = 255
-        plt.imshow(goal)
+        plt.imshow(goal.transpose((1,0,2)))
+    if agent_pos is not None:
+        agent = np.zeros(self.distance_grid.shape + (4,), dtype=np.uint8)
+        agent[agent_pos[0], agent_pos[1], 0] = 255
+        agent[agent_pos[0], agent_pos[1], 3] = 255
+        plt.imshow(agent.transpose((1,0,2)))
     return plt.gcf()
 
 stateRecording.get_distance_plot = get_figure
@@ -65,7 +70,8 @@ class restartAt(gym.Wrapper):
         self.env.unwrapped._agent_default_pos = start
         self.env.unwrapped._goal_default_pos = goal
         obs, info = super().reset(*args, **kwargs)
-        self.env.unwrapped.agent_pos = start
+        if start is not None:
+            self.env.unwrapped.agent_pos = start
         return obs, info
 
 if __name__ == "__main__":
@@ -114,7 +120,9 @@ if __name__ == "__main__":
     cv2.imwrite("before_env_obs.png", obs)
 
     goal = find_goal(env)
+    agent_pos = env.unwrapped.agent_pos
     print("position of goal", goal)
+    print("position of agent", agent_pos)
     di = [0,1,-1, 0]; dj = [-1, 0, 0, 1]
     for i in range(4):
         new_i = goal[0] + di[i]
@@ -159,7 +167,7 @@ if __name__ == "__main__":
         for j in range(grid.width):
             if (i, j) == goal: continue
             c = grid.get(i, j)
-            if c is None:
+            if c is None or (c.type != "goal" and c.type != "wall"):
                 obs_allviews = []
                 position = (i, j)
                 print(position)
@@ -185,9 +193,11 @@ if __name__ == "__main__":
                 mask[position[0], position[1]] = 1
     print(position)
     mask[agent_goal[0], agent_goal[1]] = 0.5
-    record_state.distance_grid = distance_grid
-    record_state.get_distance_plot(goal)
-    plt.savefig("distance.png")
+    record_state.distance_grid = distance_grid/np.max(distance_grid)
+    record_state.get_distance_plot(goal, agent_pos)
+    plt.xticks([])
+    plt.yticks([])
+    plt.savefig(f"{args.env_id}.png", dpi=400)
     plt.imshow(mask)
     # save mask for debugging
     plt.savefig("mask.png")
